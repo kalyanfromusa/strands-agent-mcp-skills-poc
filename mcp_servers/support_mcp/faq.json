@@ -1,0 +1,42 @@
+[
+  {
+    "question": "How long does shipping take?",
+    "answer": "Standard shipping takes 3-5 business days and express shipping 1-2 business days. Orders placed before 2 pm (local time) on a business day ship the same day. You get a tracking number by email as soon as the order ships.",
+    "keywords": ["shipping", "delivery", "ship", "arrive", "when", "express", "standard", "tracking", "days"]
+  },
+  {
+    "question": "What is your return policy?",
+    "answer": "Most items can be returned within 30 days of delivery; electronics within 15 days. Final-sale items cannot be returned. Items must be unused and in their original packaging. Start a return from your order and we email a prepaid return label.",
+    "keywords": ["return", "returns", "policy", "window", "exchange", "final-sale", "send", "back"]
+  },
+  {
+    "question": "When will I get my refund?",
+    "answer": "Refunds are issued to the original payment method within 5-7 business days after the returned item reaches our warehouse. You get an email confirmation when the refund is processed. Bank processing can add 2-3 days.",
+    "keywords": ["refund", "money", "back", "reimburse", "credit", "when", "processed"]
+  },
+  {
+    "question": "My item arrived damaged or defective. What should I do?",
+    "answer": "Sorry about that. Contact support within 7 days of delivery with your order number and a photo of the damage. We send a free replacement or a full refund, and you don't pay for return shipping on damaged or defective items.",
+    "keywords": ["damaged", "broken", "defective", "faulty", "cracked", "wrong", "item", "replacement"]
+  },
+  {
+    "question": "Can I change or cancel my order?",
+    "answer": "You can change the shipping address or cancel an order while it is still PROCESSING. Once it has SHIPPED it can't be changed: wait for delivery and start a return instead.",
+    "keywords": ["change", "cancel", "modify", "address", "edit", "order", "update"]
+  },
+  {
+    "question": "Which payment methods do you accept?",
+    "answer": "We accept Visa, Mastercard, American Express, PayPal, Apple Pay and Google Pay. Gift cards can be combined with any of these. Your card is charged when the order ships.",
+    "keywords": ["payment", "pay", "card", "credit", "paypal", "apple", "google", "gift", "methods", "charged"]
+  },
+  {
+    "question": "How can I contact customer support?",
+    "answer": "Chat with us here 24/7, email support@shopassist.example.com, or call +1 800 555 0142 (Mon-Fri, 9 am-6 pm ET). For an existing case, quote your ticket number (TCK-xxxxxx).",
+    "keywords": ["contact", "support", "phone", "email", "call", "help", "human", "agent", "hours"]
+  },
+  {
+    "question": "How do I track my order?",
+    "answer": "Use the tracking number in your shipping confirmation email on the carrier's website (UPS, FedEx, DHL or USPS), or ask this assistant for your order status with your order number.",
+    "keywords": ["track", "tracking", "where", "status", "carrier", "package", "order"]
+  }
+]

@@ -1,0 +1,27 @@
+# Example settings for the ShopAssist Terraform deployment.
+#
+# What this file does: shows every setting you can change, with its safe default value.
+# How to use it: copy it to terraform.tfvars (git-ignored, so your values stay private), edit, then
+# run `terraform apply`. Terraform reads terraform.tfvars automatically. Any line you delete falls
+# back to the default in variables.tf, where each setting is described in full.
+#
+#   region             AWS region for everything. AgentCore and the model must be available there.
+#   name_prefix        Start of every resource name and the project tag: 2-21 lowercase letters/digits.
+#   model_id           The Bedrock model (or inference profile) the agent uses. Your account needs access.
+#   log_retention_days Days to keep logs in CloudWatch. Fewer days costs less.
+#   seed_data          Load the demo orders into DynamoDB after apply (needs `uv` on PATH). false = skip.
+#
+# Copy to terraform.tfvars (git-ignored) and adjust.
+region             = "us-east-1"
+name_prefix        = "shopassist"
+model_id           = "us.anthropic.claude-haiku-5-5"
+log_retention_days = 7
+seed_data          = true
+
+# Optional cost guard-rail
+# Set enable_budget = true and a real address in budget_email to get an email when this month's spend
+# passes 80% of budget_limit_usd (in US dollars), or is forecast to pass 100%. Alerts only: nothing is
+# stopped or deleted automatically.
+enable_budget    = false
+budget_email     = ""
+budget_limit_usd = 5

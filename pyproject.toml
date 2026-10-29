@@ -1,0 +1,19 @@
+[project]
+name = "shopassist-poc"
+version = "0.1.0"
+description = "Generic skills-driven Strands agent using MCP tools via Amazon Bedrock AgentCore Gateway"
+requires-python = ">=3.12"
+dependencies = [
+    "strands-agents>=1.62",
+    "bedrock-agentcore>=1.25",
+    "mcp>=2.1",
+    "boto3>=1.43",
+    "pyyaml>=6",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "moto[dynamodb]>=5.2"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "mcp_servers"]

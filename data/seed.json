@@ -1,0 +1,104 @@
+{
+  "_comment": "Relative dates: order_days_ago / delivered_days_ago are converted to ISO dates (UTC) at load/seed time. total is computed from items.",
+  "customers": [
+    {"customer_id": "C001", "name": "Alice Martin", "email": "alice.martin@example.com"},
+    {"customer_id": "C002", "name": "Ben Okafor", "email": "ben.okafor@example.com"},
+    {"customer_id": "C003", "name": "Chloe Dubois", "email": "chloe.dubois@example.com"}
+  ],
+  "orders": [
+    {
+      "order_id": "1001", "customer_id": "C001", "status": "DELIVERED",
+      "order_days_ago": 16, "delivered_days_ago": 12,
+      "carrier": "UPS", "tracking_number": "1Z999AA10000001001",
+      "_case": "in-window clothing (12 of 30 days)",
+      "items": [
+        {"sku": "CL-JKT-001", "name": "Waterproof Rain Jacket", "category": "clothing", "qty": 1, "price": 89.90},
+        {"sku": "CL-SCK-004", "name": "Merino Socks (3-pack)", "category": "clothing", "qty": 2, "price": 14.50}
+      ]
+    },
+    {
+      "order_id": "1002", "customer_id": "C001", "status": "DELIVERED",
+      "order_days_ago": 50, "delivered_days_ago": 45,
+      "carrier": "FedEx", "tracking_number": "7712000001002",
+      "_case": "out-of-window home item (45 of 30 days)",
+      "items": [
+        {"sku": "HM-LMP-010", "name": "Ceramic Table Lamp", "category": "home", "qty": 1, "price": 49.00}
+      ]
+    },
+    {
+      "order_id": "1003", "customer_id": "C002", "status": "DELIVERED",
+      "order_days_ago": 13, "delivered_days_ago": 10,
+      "carrier": "UPS", "tracking_number": "1Z999AA10000001003",
+      "_case": "electronics at 10 days (eligible, 15-day window)",
+      "items": [
+        {"sku": "EL-SPK-020", "name": "Portable Bluetooth Speaker", "category": "electronics", "qty": 1, "price": 59.99}
+      ]
+    },
+    {
+      "order_id": "1004", "customer_id": "C002", "status": "DELIVERED",
+      "order_days_ago": 24, "delivered_days_ago": 20,
+      "carrier": "DHL", "tracking_number": "JD0140000001004",
+      "_case": "electronics at 20 days (not eligible) next to clothing at 20 days (eligible)",
+      "items": [
+        {"sku": "EL-WCH-030", "name": "Fitness Smartwatch", "category": "electronics", "qty": 1, "price": 149.00},
+        {"sku": "CL-TSH-007", "name": "Organic Cotton T-Shirt", "category": "clothing", "qty": 3, "price": 19.00}
+      ]
+    },
+    {
+      "order_id": "1005", "customer_id": "C003", "status": "DELIVERED",
+      "order_days_ago": 9, "delivered_days_ago": 7,
+      "carrier": "USPS", "tracking_number": "9400100000000001005",
+      "_case": "final-sale item (never eligible) next to a regular accessory",
+      "items": [
+        {"sku": "FS-SWM-040", "name": "Clearance Swimsuit", "category": "final-sale", "qty": 1, "price": 24.99},
+        {"sku": "AC-SNG-041", "name": "Polarized Sunglasses", "category": "accessories", "qty": 1, "price": 39.00}
+      ]
+    },
+    {
+      "order_id": "1006", "customer_id": "C003", "status": "SHIPPED",
+      "order_days_ago": 3, "delivered_days_ago": null,
+      "carrier": "UPS", "tracking_number": "1Z999AA10000001006",
+      "_case": "shipped, not delivered yet",
+      "items": [
+        {"sku": "HM-MUG-050", "name": "Stoneware Mug Set", "category": "home", "qty": 1, "price": 32.00}
+      ]
+    },
+    {
+      "order_id": "1007", "customer_id": "C001", "status": "DELIVERED",
+      "order_days_ago": 11, "delivered_days_ago": 8,
+      "carrier": "FedEx", "tracking_number": "7712000001007",
+      "_case": "one item already returned, the other still eligible",
+      "items": [
+        {"sku": "CL-HAT-060", "name": "Wool Beanie", "category": "clothing", "qty": 1, "price": 22.00, "returned": true},
+        {"sku": "CL-GLV-061", "name": "Touchscreen Gloves", "category": "clothing", "qty": 1, "price": 18.00}
+      ]
+    },
+    {
+      "order_id": "1008", "customer_id": "C002", "status": "PROCESSING",
+      "order_days_ago": 1, "delivered_days_ago": null,
+      "carrier": null, "tracking_number": null,
+      "_case": "processing, not shipped",
+      "items": [
+        {"sku": "EL-CBL-070", "name": "USB-C Charging Cable (2 m)", "category": "electronics", "qty": 2, "price": 12.99}
+      ]
+    },
+    {
+      "order_id": "1009", "customer_id": "C003", "status": "CANCELLED",
+      "order_days_ago": 20, "delivered_days_ago": null,
+      "carrier": null, "tracking_number": null,
+      "_case": "cancelled",
+      "items": [
+        {"sku": "HM-CSH-080", "name": "Linen Cushion Cover", "category": "home", "qty": 2, "price": 16.00}
+      ]
+    },
+    {
+      "order_id": "1042", "customer_id": "C001", "status": "DELIVERED",
+      "order_days_ago": 8, "delivered_days_ago": 5,
+      "carrier": "UPS", "tracking_number": "1Z999AA10000001042",
+      "_case": "DEMO ANCHOR: wireless headphones, electronics, 5 of 15 days, eligible",
+      "items": [
+        {"sku": "EL-HP-100", "name": "Wireless Noise-Cancelling Headphones", "category": "electronics", "qty": 1, "price": 199.99}
+      ]
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+[
+  {
+    "name": "get_order",
+    "description": "Look up one order by its order number. Returns the order status (PROCESSING, SHIPPED, DELIVERED or CANCELLED), order and delivery dates, carrier and tracking number, total, and every item with its sku, name, category, quantity, price and whether it was already returned. Use it to answer order-status or tracking questions and to find the sku of an item before checking or creating a return. Returns {\"error\": \"ORDER_NOT_FOUND\"} if the order does not exist.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "order_id": {"type": "string", "description": "Order number, digits only, e.g. \"1042\" (strip any leading '#')."}
+      },
+      "required": ["order_id"]
+    }
+  },
+  {
+    "name": "list_customer_orders",
+    "description": "List all orders of a customer, newest first, as summaries (order_id, status, order_date, total). Use it when the customer does not know their order number. Call get_order afterwards for item details.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "customer_id": {"type": "string", "description": "Customer id, e.g. \"C001\"."}
+      },
+      "required": ["customer_id"]
+    }
+  },
+  {
+    "name": "check_return_eligibility",
+    "description": "Check whether one item of an order can be returned under the store's return policy, without creating anything. Returns eligible (true/false), a human-readable reason, days_since_delivery, the item's return_window_days and the refund_amount the customer would get. Always call this before create_return and explain the reason to the customer when the item is not eligible.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "order_id": {"type": "string", "description": "Order number, e.g. \"1042\"."},
+        "sku": {"type": "string", "description": "SKU of the item to return, as shown by get_order (e.g. \"EL-HP-100\")."}
+      },
+      "required": ["order_id", "sku"]
+    }
+  },
+  {
+    "name": "create_return",
+    "description": "Create a return request for one item of an order and get a prepaid shipping label. Only call it after the customer has confirmed they want to return the item. Eligibility is re-checked server-side: returns {\"error\": \"NOT_ELIGIBLE\", \"reason\": ...} if the item cannot be returned. On success returns return_id (RET-xxxxxx), status REQUESTED, refund_amount and label_url.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "order_id": {"type": "string", "description": "Order number, e.g. \"1042\"."},
+        "sku": {"type": "string", "description": "SKU of the item to return, as shown by get_order."},
+        "reason": {"type": "string", "description": "Customer's reason for the return, in a few words (e.g. \"too small\", \"arrived damaged\")."}
+      },
+      "required": ["order_id", "sku", "reason"]
+    }
+  }
+]

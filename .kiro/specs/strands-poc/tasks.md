@@ -1,0 +1,11 @@
+# Tasks
+- [x] 0. Contracts, steering, project scaffold
+- [x] 1. Tools: common store, orders Lambda, support FastMCP, seed data, local gateway emulator, build script, tests
+- [x] 2. Generic agent: app, skills binding hooks, gateway auth, skills content, run_local, invoke_agent, tests
+- [x] 3. Terraform stack (validate)
+- [x] 4. boto3 deploy/destroy (static check)
+- [x] 5. Local end-to-end run (local gateway + real Bedrock)
+- [ ] 6. Deploy with Terraform → smoke test → destroy
+- [ ] 7. Deploy with boto3 → smoke test → destroy
+- [ ] 8. Per-user access demo (alice/bob/carol) verified on the deployed stack
+- [x] 9. Docs + README
