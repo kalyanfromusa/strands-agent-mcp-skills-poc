@@ -199,3 +199,20 @@ aws s3 ls | grep shopassist
 If something is left (for example a log group the service recreated after Terraform deleted it),
 delete it by hand, or run `uv run python infra/boto3/destroy.py --yes`, which finds resources by
 name and treats "already gone" as success.
+
+## Verified run (2026-10-29)
+
+Deployed with Terraform to a Workshop Studio account in us-east-1, then destroyed. `scripts/demo_access.py`:
+
+| # | Check | Enforced by | Result |
+|---|---|---|---|
+| a | alice: agent creates the return | all layers allow (admin) | ✅ `get_order` → `check_return_eligibility` → `create_return` |
+| b | bob: no return, permission explained | AgentCore Policy hides the tool, and the skill guidance explains | ✅ no `create_return` |
+| c | carol: agent call rejected | Runtime JWT authorizer (`cognito:groups` claim) | ✅ HTTP 401 |
+| d | bob: Gateway `tools/list` | AgentCore Policy filters the list per user | ✅ 5 tools, write tools hidden |
+| d | bob: Gateway `tools/call orders___create_return` | AgentCore Policy (Cedar) | ✅ "Tool call not allowed due to policy enforcement (denied by default)" |
+| d | alice: Gateway `tools/list` | all layers allow | ✅ 7 tools |
+
+Two first-deploy issues were fixed in Terraform: an empty `protocol_configuration { mcp {} }` is rejected by the
+API, so it is omitted; and AgentCore creates the runtime log groups itself, so `scripts/log_group.py` sets their
+retention and deletes them on destroy.
