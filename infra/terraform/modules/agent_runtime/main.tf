@@ -275,12 +275,29 @@ resource "aws_bedrockagentcore_agent_runtime" "this" {
   depends_on = [time_sleep.iam]
 }
 
-# Step 5: the log group where the agent's log messages go, kept for log_retention_days.
-# AgentCore writes to /aws/bedrock-agentcore/runtimes/<runtime_id>-DEFAULT. The id only
-# exists after creation, so this is created right after the runtime. If the service wins
-# the race and creates the group first, apply fails with ResourceAlreadyExistsException:
-# `terraform import module.agent_runtime.aws_cloudwatch_log_group.runtime <name>` fixes it.
-resource "aws_cloudwatch_log_group" "runtime" {
-  name              = "/aws/bedrock-agentcore/runtimes/${aws_bedrockagentcore_agent_runtime.this.agent_runtime_id}-DEFAULT"
-  retention_in_days = var.log_retention_days
+# Step 5: keep the runtime's log messages for log_retention_days, and remove them on destroy.
+# AgentCore itself creates /aws/bedrock-agentcore/runtimes/<runtime_id>-DEFAULT as soon as the
+# runtime starts, so Terraform must not "create" it (that races and fails with "already exists").
+# Instead this placeholder resource runs scripts/log_group.py on the computer running Terraform:
+# "ensure" creates the group if it is still missing and sets the retention; on terraform destroy,
+# "delete" removes it so no logs are left behind. Destroy-time commands may only use values saved
+# in this resource ("self"), which is why the name, region and folder are stored in input.
+resource "terraform_data" "log_group" {
+  input = {
+    name      = "/aws/bedrock-agentcore/runtimes/${aws_bedrockagentcore_agent_runtime.this.agent_runtime_id}-DEFAULT"
+    region    = var.region
+    days      = var.log_retention_days
+    repo_root = var.repo_root
+  }
+
+  provisioner "local-exec" {
+    working_dir = self.input.repo_root
+    command     = "uv run python scripts/log_group.py ensure --name ${self.input.name} --region ${self.input.region} --days ${self.input.days}"
+  }
+
+  provisioner "local-exec" {
+    when        = destroy
+    working_dir = self.input.repo_root
+    command     = "uv run python scripts/log_group.py delete --name ${self.input.name} --region ${self.input.region}"
+  }
 }

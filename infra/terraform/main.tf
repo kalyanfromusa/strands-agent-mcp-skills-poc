@@ -144,6 +144,7 @@ module "mcp_runtime" {
 
   name_prefix        = var.name_prefix
   region             = var.region
+  repo_root          = local.repo_root
   account_id         = local.account_id
   bucket             = module.data.artifacts_bucket
   zip_key            = module.data.artifact_keys["support_mcp"]
@@ -194,6 +195,7 @@ module "agent_runtime" {
 
   name_prefix    = var.name_prefix
   region         = var.region
+  repo_root      = local.repo_root
   account_id     = local.account_id
   bucket         = module.data.artifacts_bucket
   zip_key        = module.data.artifact_keys["agent"]

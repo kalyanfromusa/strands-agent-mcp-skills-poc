@@ -18,4 +18,4 @@
 
 output "runtime_arn" { value = aws_bedrockagentcore_agent_runtime.this.agent_runtime_arn }
 output "runtime_id" { value = aws_bedrockagentcore_agent_runtime.this.agent_runtime_id }
-output "log_group" { value = aws_cloudwatch_log_group.runtime.name }
+output "log_group" { value = terraform_data.log_group.output.name }

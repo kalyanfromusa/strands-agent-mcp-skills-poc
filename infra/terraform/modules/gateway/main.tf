@@ -188,10 +188,8 @@ resource "aws_bedrockagentcore_gateway" "this" {
     }
   }
 
-  # No search_type: semantic tool search stays off (7 tools do not need it).
-  protocol_configuration {
-    mcp {}
-  }
+  # No protocol_configuration block: the API rejects an empty MCP configuration, and leaving it
+  # out keeps the defaults (no semantic tool search, which 7 tools do not need).
 
   # Default deny: without a matching permit, a tool is neither listed nor callable.
   policy_engine_configuration {

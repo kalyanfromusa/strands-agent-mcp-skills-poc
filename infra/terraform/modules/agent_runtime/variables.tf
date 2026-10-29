@@ -58,3 +58,6 @@ variable "allowed_groups" {
 variable "oauth_provider_name" { type = string }
 variable "oauth_scopes" { type = list(string) }
 variable "log_retention_days" { type = number }
+
+# Folder of the repository on the computer running Terraform; scripts/log_group.py runs from here.
+variable "repo_root" { type = string }

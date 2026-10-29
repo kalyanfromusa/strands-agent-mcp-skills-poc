@@ -42,3 +42,6 @@ variable "allowed_client_ids" {
 
 # How many days CloudWatch keeps the server's logs.
 variable "log_retention_days" { type = number }
+
+# Folder of the repository on the computer running Terraform; scripts/log_group.py runs from here.
+variable "repo_root" { type = string }
