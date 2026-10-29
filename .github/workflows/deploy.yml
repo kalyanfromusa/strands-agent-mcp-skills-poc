@@ -1,0 +1,324 @@
+# =====================================================================================================
+# .github/workflows/deploy.yml: test -> build arm64 images -> push to ECR -> roll out to AgentCore Runtime
+#
+# What this file does
+#   On every push to main that touches the agent, the support MCP server, the shared code or the
+#   skills (and on manual runs), it runs the offline tests, builds both container images for
+#   linux/arm64, pushes them to ECR tagged with the commit SHA and `latest`, syncs skills/ to S3,
+#   swaps the image of both AgentCore runtimes (every other runtime setting unchanged), waits for
+#   READY, re-synchronizes the Gateway's `support` target, and optionally runs the access demo.
+#
+# Where it fits
+#   docs/10-ci-cd.md. Terraform (infra/terraform, artifact_type = "container") and infra/terraform/ci
+#   create the infrastructure ONCE; this workflow never runs Terraform. It only needs the CI role
+#   (OIDC, no stored AWS keys) and the repository variables listed below.
+#
+# Step by step
+#   1. test            uv sync + pytest (offline: moto, no AWS).
+#   2. build-and-push  one matrix leg per image on a native arm64 runner: OIDC login, ECR login,
+#                      buildx build --platform linux/arm64, push <sha> + latest, GitHub Actions cache.
+#   3. deploy          aws s3 sync skills/, update-runtime for the agent and the support MCP server
+#                      (scripts/ci/update_runtime_image.py), then sync-target support.
+#   4. smoke           (optional) scripts/demo_access.py with .deploy/ files rebuilt from secrets.
+#   Manual run with image_tag = <older full SHA> skips the build and redeploys that image (rollback).
+#
+# Repository VARIABLES (Settings > Secrets and variables > Actions > Variables; none of these are secret)
+#   AWS_ROLE_ARN            CI role from infra/terraform/ci (output ci_role_arn). Unset = AWS jobs skip.
+#   AWS_REGION              default us-east-1
+#   AGENT_RUNTIME_ID        e.g. shopassist_agent-AbC123xyz9 (from agent_runtime_arn in .deploy/outputs.json)
+#   SUPPORT_MCP_RUNTIME_ID  e.g. shopassist_support_mcp-XyZ987abc6
+#   GATEWAY_ID              e.g. shopassist-gateway-abc123def4
+#   ARTIFACTS_BUCKET        e.g. shopassist-artifacts-<account>-us-east-1
+#   ECR_AGENT_REPOSITORY / ECR_SUPPORT_MCP_REPOSITORY   default shopassist-agent / shopassist-support-mcp
+#   SUPPORT_TARGET_NAME     default support
+#   BUILD_RUNNER            default ubuntu-24.04-arm; set ubuntu-24.04 (+ USE_QEMU=true) if arm64
+#                           runners are not available to this (private) repository
+#   USE_QEMU                "true" = emulate arm64 with QEMU on an x64 runner (slow)
+#   RUN_SMOKE               "true" = run the smoke job after every deploy
+#   SMOKE_SCENARIOS         default b,c,d (a creates a real return and needs a re-seed)
+# Repository SECRETS (smoke job only)
+#   DEPLOY_OUTPUTS_JSON     content of .deploy/outputs.json
+#   DEPLOY_USERS_JSON       content of .deploy/users.json (demo passwords: this one IS secret)
+#
+# Key terms
+#   OIDC: GitHub issues a signed token per job (permission id-token: write); AWS STS trades it for
+#     one-hour credentials of the CI role. Its trust policy only accepts this repo on refs/heads/main,
+#     so the jobs below must not use a GitHub `environment:` (that changes the token's subject).
+#   buildx: Docker's builder; `type=gha` stores layer cache in the GitHub Actions cache.
+#   Matrix: one job definition run once per entry (here: once per image), in parallel.
+# =====================================================================================================
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "agent/**"
+      - "mcp_servers/support_mcp/**"
+      - "mcp_servers/common/**"
+      - "skills/**"
+      - "scripts/ci/**"
+      - ".github/workflows/deploy.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Rollback: full commit SHA of an image already in ECR (empty = build this commit)"
+        type: string
+        default: ""
+      run_smoke:
+        description: "Run scripts/demo_access.py after the deploy (needs DEPLOY_*_JSON secrets)"
+        type: boolean
+        default: false
+
+# Least privilege for the GITHUB_TOKEN; id-token lets jobs request the OIDC token for AWS.
+permissions:
+  id-token: write
+  contents: read
+
+# One rollout at a time; never cancel one half-way (a runtime could be left mid-update).
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
+  ECR_AGENT_REPOSITORY: ${{ vars.ECR_AGENT_REPOSITORY || 'shopassist-agent' }}
+  ECR_SUPPORT_MCP_REPOSITORY: ${{ vars.ECR_SUPPORT_MCP_REPOSITORY || 'shopassist-support-mcp' }}
+
+jobs:
+  # ------------------------------------------------------------------ 1. offline tests
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      # --frozen: install exactly uv.lock without re-resolving (the lock was written by an older uv).
+      - run: uv sync --frozen
+      - run: uv run pytest -q
+
+  # ------------------------------------------------------------------ 2. build + push (one leg per image)
+  build-and-push:
+    needs: test
+    if: vars.AWS_ROLE_ARN != '' && (github.event_name == 'push' || inputs.image_tag == '')
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-24.04-arm' }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: agent
+            dockerfile: agent/Dockerfile
+          - name: support-mcp
+            dockerfile: mcp_servers/support_mcp/Dockerfile
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: gha-build-${{ matrix.name }}-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: ECR login
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      # QEMU fallback: only when building arm64 on an x64 runner (vars.BUILD_RUNNER = ubuntu-24.04).
+      # Expect roughly 5-15 minutes per image instead of 1-3 natively.
+      - name: QEMU (arm64 emulation fallback)
+        if: vars.USE_QEMU == 'true'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Image name
+        id: meta
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          LEG: ${{ matrix.name }}
+        run: |
+          repo="$ECR_SUPPORT_MCP_REPOSITORY"; [ "$LEG" = agent ] && repo="$ECR_AGENT_REPOSITORY"
+          echo "repository=${REGISTRY}/${repo}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push ${{ matrix.name }} (linux/arm64)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .                      # repo root: the support image needs mcp_servers/common
+          file: ${{ matrix.dockerfile }}  # <Dockerfile>.dockerignore next to it trims the context
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.repository }}:${{ github.sha }}
+            ${{ steps.meta.outputs.repository }}:latest
+          # A plain single-platform image manifest (no attestation index) for AgentCore Runtime.
+          provenance: false
+          sbom: false
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  # ------------------------------------------------------------------ 3. roll out (no Terraform)
+  deploy:
+    needs: [test, build-and-push]
+    if: >-
+      !cancelled() && vars.AWS_ROLE_ARN != '' && needs.test.result == 'success' &&
+      (needs.build-and-push.result == 'success' ||
+       (needs.build-and-push.result == 'skipped' && inputs.image_tag != ''))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      AGENT_RUNTIME_ID: ${{ vars.AGENT_RUNTIME_ID }}
+      SUPPORT_MCP_RUNTIME_ID: ${{ vars.SUPPORT_MCP_RUNTIME_ID }}
+      GATEWAY_ID: ${{ vars.GATEWAY_ID }}
+      ARTIFACTS_BUCKET: ${{ vars.ARTIFACTS_BUCKET }}
+      SUPPORT_TARGET_NAME: ${{ vars.SUPPORT_TARGET_NAME || 'support' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Rollback: take skills/ from the same commit as the image, scripts from the current one.
+      - name: Check out skills of the rollback commit
+        if: inputs.image_tag != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.image_tag }}
+          path: rollback
+          sparse-checkout: skills
+          persist-credentials: false
+
+      - name: Check inputs and repository variables
+        run: |
+          if ! [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::image_tag must be a full 40-character commit SHA"; exit 1
+          fi
+          missing=""
+          for v in AGENT_RUNTIME_ID SUPPORT_MCP_RUNTIME_ID GATEWAY_ID ARTIFACTS_BUCKET; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Set these repository variables first (docs/10-ci-cd.md):$missing"; exit 1
+          fi
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --no-dev
+
+      - name: AWS credentials (OIDC)
+        id: aws
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: gha-deploy-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Image URIs
+        id: img
+        env:
+          ACCOUNT_ID: ${{ steps.aws.outputs.aws-account-id }}
+        run: |
+          registry="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          echo "agent=${registry}/${ECR_AGENT_REPOSITORY}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "support=${registry}/${ECR_SUPPORT_MCP_REPOSITORY}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      # Fails fast (before touching any runtime) if a rollback tag was expired by the ECR lifecycle rule.
+      - name: Check both images exist in ECR
+        run: |
+          aws ecr describe-images --repository-name "$ECR_AGENT_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" --query 'imageDetails[0].imagePushedAt'
+          aws ecr describe-images --repository-name "$ECR_SUPPORT_MCP_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" --query 'imageDetails[0].imagePushedAt'
+
+      # Skills are read by the agent at cold start; the runtime update below starts fresh sessions.
+      - name: Sync skills to S3
+        run: |
+          src=skills; [ -d rollback/skills ] && src=rollback/skills
+          aws s3 sync "$src/" "s3://${ARTIFACTS_BUCKET}/skills/" --delete --exclude "*__pycache__*" --no-progress
+
+      - name: Roll out support MCP image
+        env:
+          IMAGE: ${{ steps.img.outputs.support }}
+        run: >
+          uv run --no-sync python scripts/ci/update_runtime_image.py update-runtime
+          --region "$AWS_REGION" --runtime-id "$SUPPORT_MCP_RUNTIME_ID" --image "$IMAGE"
+
+      - name: Re-synchronize the Gateway support target
+        run: >
+          uv run --no-sync python scripts/ci/update_runtime_image.py sync-target
+          --region "$AWS_REGION" --gateway-id "$GATEWAY_ID" --target-name "$SUPPORT_TARGET_NAME"
+
+      - name: Roll out agent image
+        env:
+          IMAGE: ${{ steps.img.outputs.agent }}
+        run: >
+          uv run --no-sync python scripts/ci/update_runtime_image.py update-runtime
+          --region "$AWS_REGION" --runtime-id "$AGENT_RUNTIME_ID" --image "$IMAGE"
+
+      - name: Summary
+        env:
+          AGENT_IMAGE: ${{ steps.img.outputs.agent }}
+          SUPPORT_IMAGE: ${{ steps.img.outputs.support }}
+        run: |
+          {
+            echo "### Deployed \`${IMAGE_TAG}\`"
+            echo "- agent: \`${AGENT_IMAGE}\` -> \`${AGENT_RUNTIME_ID}\`"
+            echo "- support MCP: \`${SUPPORT_IMAGE}\` -> \`${SUPPORT_MCP_RUNTIME_ID}\`"
+            echo "- skills synced to \`s3://${ARTIFACTS_BUCKET}/skills/\`, target \`${SUPPORT_TARGET_NAME}\` re-synchronized"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------ 4. optional end-to-end check
+  # Talks to Cognito and the runtimes over HTTPS with demo-user tokens: no AWS credentials needed.
+  # --no-reseed because the CI role may not write DynamoDB; scenario a (a real return) is off by default.
+  smoke:
+    needs: deploy
+    if: >-
+      !cancelled() && needs.deploy.result == 'success' &&
+      (inputs.run_smoke == true || vars.RUN_SMOKE == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --no-dev
+      - name: Recreate .deploy/ from secrets
+        env:
+          OUTPUTS: ${{ secrets.DEPLOY_OUTPUTS_JSON }}
+          USERS: ${{ secrets.DEPLOY_USERS_JSON }}
+        run: |
+          if [ -z "$OUTPUTS" ] || [ -z "$USERS" ]; then
+            echo "::warning::DEPLOY_OUTPUTS_JSON / DEPLOY_USERS_JSON secrets not set; skipping smoke test"
+            echo "SKIP_SMOKE=1" >> "$GITHUB_ENV"; exit 0
+          fi
+          mkdir -p .deploy
+          printf '%s' "$OUTPUTS" > .deploy/outputs.json
+          (umask 077; printf '%s' "$USERS" > .deploy/users.json)
+      - name: Access demo (scripts/demo_access.py)
+        if: env.SKIP_SMOKE != '1'
+        env:
+          SCENARIOS: ${{ vars.SMOKE_SCENARIOS || 'b,c,d' }}
+        run: uv run --no-sync python scripts/demo_access.py --no-reseed --only "$SCENARIOS"
+      - name: Remove .deploy/
+        if: always()
+        run: rm -rf .deploy

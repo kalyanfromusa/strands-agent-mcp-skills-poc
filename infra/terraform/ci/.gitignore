@@ -1,0 +1,6 @@
+# This root has its own local state (the repo-root .gitignore only covers infra/terraform/ itself).
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+tfplan

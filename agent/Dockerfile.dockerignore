@@ -1,0 +1,5 @@
+# Ignore file for agent/Dockerfile (BuildKit picks up <Dockerfile>.dockerignore automatically).
+# The build context is the repo root, so allow-list only what the image needs.
+*
+!agent/requirements.txt
+!agent/*.py
