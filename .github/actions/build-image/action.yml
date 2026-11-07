@@ -77,6 +77,9 @@ runs:
     # Step 4: known vulnerabilities with a fix available fail the build.
     - name: Trivy scan (${{ inputs.kind }})
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      env:
+        # Accepted findings, each with a reason and an expiry date (.trivyignore.yaml at the repo root).
+        TRIVY_IGNOREFILE: ${{ inputs.source }}/.trivyignore.yaml
       with:
         image-ref: local/${{ inputs.kind }}:${{ inputs.tag }}
         severity: HIGH,CRITICAL

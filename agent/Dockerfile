@@ -31,6 +31,12 @@
 
 FROM --platform=linux/arm64 python:3.12-slim
 
+# Security updates for the base image's OS packages (the slim image can lag behind Debian's fixes;
+# Trivy in CI fails the build on fixable HIGH/CRITICAL findings). One layer, apt lists removed after.
+RUN apt-get update \
+    && apt-get -y upgrade --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 # COMPILE_BYTECODE=1 (default, used in CI on native arm64): pre-compile .pyc for a faster cold start.
 # Pass --build-arg COMPILE_BYTECODE=0 for a build under QEMU emulation (x86 runner), where compiling the
 # dependencies takes ~10 minutes instead of seconds.

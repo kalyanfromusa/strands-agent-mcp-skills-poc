@@ -1,0 +1,22 @@
+# =====================================================================================================
+# .trivyignore.yaml: the few Trivy findings we accept on purpose, each with a reason and an expiry
+#
+# What this file does
+#   Lists vulnerabilities that the image scan in CI (.github/actions/build-image) must not fail on.
+#   Each entry is limited to one CVE and one file path, says why it's acceptable, and expires, so
+#   after the date the build fails again and someone has to look at it.
+#
+# Where it fits
+#   Trivy reads it through TRIVY_IGNOREFILE. Everything not listed here still fails the build when it
+#   is HIGH/CRITICAL and has a fix available.
+# =====================================================================================================
+vulnerabilities:
+  - id: CVE-2026-111943
+    paths:
+      - "usr/local/bin/aws-lambda-rie"
+    statement: >-
+      Go stdlib (crypto/x509) in the Lambda Runtime Interface Emulator that ships in AWS's
+      public.ecr.aws/lambda/python:3.12-arm64 base image. The emulator only runs when the image is
+      started outside Lambda (local and CI tests); inside AWS Lambda it isn't executed. AWS will ship
+      a fixed binary in a base-image update. Accepted 2026-11-07 until the date below.
+    expired_at: 2026-12-31
