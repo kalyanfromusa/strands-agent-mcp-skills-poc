@@ -1,0 +1,177 @@
+# =====================================================================================================
+# .github/workflows/destroy.yml: remove a whole ShopAssist environment from AWS (manual, approved)
+#
+# What this file does
+#   Run by hand (Actions → destroy → Run workflow) with:
+#     target_env     prod (default) or dev
+#     confirm        must be typed exactly as "destroy prod" (or "destroy dev"): a guard against mis-clicks
+#     delete_images  true (default): also delete every image in the ShopAssist ECR repositories.
+#                    Set false if the OTHER environment is still deployed (the repositories are shared).
+#   Jobs:
+#     1. prepare  checks the inputs.
+#     2. plan     read-only `terraform plan -destroy` with the plan role; its summary (addresses only) is
+#                 what you approve.
+#     3. destroy  waits in the GitHub environment <target_env> (prod: your approval), re-plans and refuses
+#                 to continue if the plan differs from the approved one, runs `terraform destroy`, then
+#                 the clean sweep (scripts/leftovers.py --sweep): ECR images, AgentCore Identity secrets
+#                 still in Secrets Manager's recovery window (force-deleted), stray log groups, and the
+#                 environment's state file. It fails if the final scan still finds anything.
+#
+# What is removed: runtimes, Gateway + targets + Cedar policies + policy engine, Lambda, DynamoDB tables
+#   (all orders, returns and tickets), the S3 bucket with the skills, the Cognito pool with every user,
+#   the OAuth credential providers and their secrets, IAM roles, log groups, the budget, images.
+# What stays (free while empty, and needed to deploy again): the state bucket, the empty ECR
+#   repositories, the GitHub OIDC provider, the CI roles and the permissions boundaries. To remove those
+#   too, run scripts/destroy_everything.sh on your machine (it can't run here: it deletes the very roles
+#   and bucket this workflow uses).
+# Recreate: run deploy.yml again (one click).
+#
+# Repository variables: AWS_REGION, AWS_PLAN_ROLE. Environment variable: AWS_APPLY_ROLE.
+# =====================================================================================================
+name: destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: Environment to destroy
+        type: choice
+        options: [prod, dev]
+        default: prod
+      confirm:
+        description: 'Type exactly: destroy <target_env> (e.g. "destroy prod")'
+        type: string
+        required: true
+      delete_images:
+        description: Also delete all ECR images (set false if the other environment is still deployed)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Same group as deploy.yml: a destroy never overlaps a deploy of the same environment.
+concurrency:
+  group: deploy-${{ inputs.target_env }}
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+  TARGET_ENV: ${{ inputs.target_env }}
+  # Terraform requires image_tag even when destroying; its value doesn't matter here.
+  IMAGE_TAG: "0000000000000000000000000000000000000000"
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check inputs
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+          REF: ${{ github.ref }}
+        run: |
+          [ "$REF" = "refs/heads/main" ] || { echo "::error::destroy only runs from main"; exit 1; }
+          [ "$CONFIRM" = "destroy ${TARGET_ENV}" ] || { echo "::error::confirm must be exactly: destroy ${TARGET_ENV}"; exit 1; }
+          echo "Destroying **${TARGET_ENV}** after approval." >> "$GITHUB_STEP_SUMMARY"
+
+  plan:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      hash: ${{ steps.plan.outputs.hash }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+      - name: AWS credentials (plan role, OIDC)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE }}
+          role-session-name: gha-destroy-plan-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: terraform plan -destroy (output kept private; summary only)
+        id: plan
+        working-directory: infra/terraform
+        run: |
+          terraform init -backend-config="envs/${TARGET_ENV}.backend.hcl" -no-color > init.log 2>&1 \
+            || { grep -E "^(Error|│)" init.log | head -40; exit 1; }
+          terraform plan -destroy -lock=false -no-color -var-file="envs/${TARGET_ENV}.tfvars" -var "image_tag=${IMAGE_TAG}" \
+            -out=tfplan > plan.log 2>&1 || { grep -E "^(Error|│)" plan.log | head -40; exit 1; }
+          terraform show -json tfplan > plan.json
+          uv run --no-project python ../../scripts/tf_plan_summary.py --title "DESTROY ${TARGET_ENV}: everything below is deleted (approve below)" \
+            < plan.json >> "$GITHUB_STEP_SUMMARY"
+          echo "hash=$(uv run --no-project python ../../scripts/tf_plan_summary.py --hash < plan.json)" >> "$GITHUB_OUTPUT"
+          rm -f tfplan plan.json plan.log init.log
+
+  destroy:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: ${{ inputs.target_env }} # prod: waits for your approval
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      APPROVED_HASH: ${{ needs.plan.outputs.hash }}
+      DELETE_IMAGES: ${{ inputs.delete_images }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen # Terraform's destroy-time steps (log group removal) and the sweep use it
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+      - name: AWS credentials (apply role for ${{ inputs.target_env }}, OIDC)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE }}
+          role-session-name: gha-destroy-${{ inputs.target_env }}-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Re-plan the destroy and compare with the approved plan
+        working-directory: infra/terraform
+        run: |
+          terraform init -backend-config="envs/${TARGET_ENV}.backend.hcl" -no-color > init.log 2>&1 \
+            || { grep -E "^(Error|│)" init.log | head -40; exit 1; }
+          terraform plan -destroy -no-color -var-file="envs/${TARGET_ENV}.tfvars" -var "image_tag=${IMAGE_TAG}" \
+            -out=tfplan > plan.log 2>&1 || { grep -E "^(Error|│)" plan.log | head -40; exit 1; }
+          now="$(terraform show -json tfplan | uv run --no-project python ../../scripts/tf_plan_summary.py --hash)"
+          [ "$now" = "$APPROVED_HASH" ] || { echo "::error::The destroy plan changed after approval. Nothing destroyed; run it again."; exit 1; }
+          echo "destroy plan matches the approved one (${now:0:16})"
+
+      - name: terraform destroy (output kept private)
+        working-directory: infra/terraform
+        run: |
+          if terraform apply -no-color tfplan > apply.log 2>&1; then
+            grep -E "^(Apply|Destroy) complete" apply.log | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            grep -E "^(Error|│)" apply.log | head -60
+            exit 1
+          fi
+
+      - name: Clean sweep + leftover scan
+        run: |
+          keep=""; [ "$DELETE_IMAGES" = "true" ] || keep="--keep-images"
+          uv run python scripts/leftovers.py --region "${{ vars.AWS_REGION }}" --env "$TARGET_ENV" --sweep $keep \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove local files
+        if: always()
+        run: rm -rf .deploy infra/terraform/tfplan infra/terraform/*.log
