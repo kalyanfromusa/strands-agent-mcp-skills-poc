@@ -24,8 +24,9 @@
 #      ShopAssist buckets, DynamoDB items, secret values), PLUS state read and lock-file write.
 #
 # Key terms
-#   sub (subject) claim: in GitHub's token, e.g. repo:owner/name:ref:refs/heads/main,
-#     repo:owner/name:pull_request, or repo:owner/name:environment:prod (when the job uses an environment).
+#   sub (subject) claim: in GitHub's token, e.g. <prefix>:ref:refs/heads/main, <prefix>:pull_request, or
+#     <prefix>:environment:prod (when the job uses an environment). This repository's prefix is the
+#     immutable form repo:<owner>@<owner id>/<repo>@<repo id> (var.github_subject_prefix).
 #   Trust policy: the part of a role that says WHO may become the role.
 #   Permissions policy: the part that says WHAT the role may do.
 #   Explicit deny: a "Deny" statement always wins over any "Allow", even one from a managed policy.
@@ -39,8 +40,9 @@ locals {
   state_bucket = "${var.name_prefix}-tfstate-${local.account_id}-${var.region}"
   repo_arns    = [for r in aws_ecr_repository.this : r.arn]
 
-  sub_main         = "repo:${var.github_repository}:ref:refs/heads/main"
-  sub_pull_request = "repo:${var.github_repository}:pull_request"
+  # GitHub's immutable subject format (see var.github_subject_prefix).
+  sub_main         = "${var.github_subject_prefix}:ref:refs/heads/main"
+  sub_pull_request = "${var.github_subject_prefix}:pull_request"
 }
 
 # Step 2: trust policies. One document per role, differing only in the allowed "sub" values.
@@ -49,7 +51,7 @@ data "aws_iam_policy_document" "trust" {
     {
       plan = [local.sub_main, local.sub_pull_request]
     },
-    { for env in var.environments : "apply-${env}" => ["repo:${var.github_repository}:environment:${env}"] },
+    { for env in var.environments : "apply-${env}" => ["${var.github_subject_prefix}:environment:${env}"] },
   )
 
   statement {

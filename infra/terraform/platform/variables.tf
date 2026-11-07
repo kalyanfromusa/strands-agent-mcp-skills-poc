@@ -42,6 +42,22 @@ variable "github_repository" {
   default     = "kalyanfromusa/strands-agent-mcp-skills-poc"
 }
 
+variable "github_subject_prefix" {
+  description = <<-EOT
+    Start of the OIDC "sub" claim GitHub puts in this repository's tokens. This repository uses GitHub's
+    immutable subject format, repo:<owner>@<owner id>/<repo>@<repo id> (check it with
+    `gh api repos/<owner>/<repo>/actions/oidc/customization/sub`). The numeric ids mean a renamed or
+    re-created repository with the same name can never assume these roles.
+  EOT
+  type        = string
+  default     = "repo:kalyanfromusa@28615456/strands-agent-mcp-skills-poc@1438682520"
+
+  validation {
+    condition     = can(regex("^repo:[^:]+$", var.github_subject_prefix))
+    error_message = "github_subject_prefix must look like repo:<owner>@<id>/<repo>@<id> (no trailing colon)."
+  }
+}
+
 variable "environments" {
   description = "Environments that get an apply role (each trusted only for the GitHub environment of the same name)."
   type        = set(string)
