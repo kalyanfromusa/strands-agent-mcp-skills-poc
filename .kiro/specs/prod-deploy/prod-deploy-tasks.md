@@ -74,10 +74,10 @@ Nothing goes in git: secrets, `.deploy/`, `*.tfstate*`, `tfplan`, `dist/`, Entra
 - [x] 4.1 Pinned requirements exported from `uv.lock` per image (a script plus a test that fails if they drift) *(2026-11-07: `scripts/pin_requirements.py` (+ `--check`), `requirements.in` → `requirements.lock.txt` with hashes; `tests/test_pinned_requirements.py`)*
 - [x] 4.2 `mcp_servers/orders_lambda/Dockerfile` (`public.ecr.aws/lambda/python:3.12-arm64`, handler unchanged) *(2026-11-07, with an allow-list `.dockerignore`)*
 - [x] 4.3 Agent and support Dockerfiles: use the pinned requirements; keep the non-root user and the allow-list context *(2026-11-07: `--require-hashes` from the lock files; comments updated for Terraform-only)*
-- [ ] 4.4 Container checks as a CI script (`scripts/ci_image_checks.sh`), run on the arm64 runner after each build: agent
+- [x] 4.4 Container checks as a CI script (`scripts/ci_image_checks.sh`), run on the arm64 runner after each build: agent
       `/ping`, support `/mcp` `tools/list`, Lambda RIE invoke of `get_order`; Trivy fails on HIGH/CRITICAL (or each is
       documented)
-      *(script written 2026-11-07: `scripts/ci_image_checks.sh`; it can only run on the arm64 runner, so it is verified in 6.7)*
+      *(script written 2026-11-07: `scripts/ci_image_checks.sh`; it can only run on the arm64 runner, so it is verified in 6.7; ✅ passed in PR #1)*
 
 ## P5. Main stack: containers, environments (code + offline checks; the first deploy runs through the pipeline in P6)
 - [x] 5.1 Variables `environment`, `image_tag` (40-hex validation), image URIs from platform outputs; env-aware names *(2026-11-07: images = platform ECR URL + `:<image_tag>`, read via `terraform_remote_state`)*
@@ -108,9 +108,13 @@ Nothing goes in git: secrets, `.deploy/`, `*.tfstate*`, `tfplan`, `dist/`, Entra
       (+ tests). Design change: no plan artifact and no secrets needed. The approved job re-plans and applies only if the
       plan hash equals the approved one; the smoke test uses the users file Terraform just wrote. `DEPLOY_USERS_JSON`
       and the plan-encryption key are dropped.)*
-- [ ] 6.6 👤 GitHub settings: environments `prod` (required reviewer = you, branch `main`) and `dev`; variables (role
+- [ ] 6.6 👤 GitHub settings *(environments, variables and ruleset done 2026-11-07; the ruleset still needs: required approvals 0, "Restrict updates" off or yourself as bypass, code-coverage rule removed)*: environments `prod` (required reviewer = you, branch `main`) and `dev`; variables (role
       ARNs, region, `DEPLOY_DEV=false`); environment secrets (none yet; `TF_VAR_entra_client_secret` in P7); branch protection on `main`; deployment branch `main` only on `prod`; 2FA on your account; no `pull_request_target` workflows. Claude prints the exact `gh` commands
-- [ ] 6.7 🧪 Open a PR → the images build and pass the checks, the summary plan comment appears, nothing is applied
+- [x] 6.7 🧪 Open a PR → the images build and pass the checks, the summary plan comment appears, nothing is applied
+      *(2026-11-07, PR #1: tests, iac, 3 images (build + container checks + Trivy) and plan all pass; the comment shows
+      "53 to add" with addresses only. Fixes found along the way: Debian security updates in the slim images, a
+      documented Trivy exception for the Lambda RIE (expires 2026-12-31), and CI trust policies switched to GitHub's
+      immutable OIDC subject `repo:kalyanfromusa@28615456/strands-agent-mcp-skills-poc@1438682520:*`)*
 - [ ] 6.8 🧪 Merge → `build.yml` builds and scans, **nothing is pushed or deployed**
 - [ ] 6.9 🧪 **First prod deploy**: manual `deploy.yml` (prod) → 👤 approve → images pushed, apply + smoke green
 - [ ] 6.10 🔑 🧪 `invoke_agent.py --user alice "Where is my order 1042?"`; `demo_access.py` a–d all ✅
