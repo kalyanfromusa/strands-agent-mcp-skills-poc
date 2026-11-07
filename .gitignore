@@ -9,6 +9,9 @@ build/
 infra/terraform/.terraform/
 infra/terraform/*.tfstate*
 infra/terraform/terraform.tfvars
-infra/boto3/state.json
 .claude/settings.local.json
 infra/terraform/tfplan
+infra/terraform/**/.terraform/
+infra/terraform/bootstrap/terraform.tfstate*
+infra/terraform/**/tfplan*
+infra/terraform/**/*.tfvars.local

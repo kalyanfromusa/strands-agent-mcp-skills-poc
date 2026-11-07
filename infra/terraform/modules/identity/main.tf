@@ -16,12 +16,12 @@
 # Step by step
 #   1. Create the user pool <prefix>-pool, where only an administrator (Terraform) can create users.
 #   2. Give it a domain, which hosts the /oauth2/token address that hands out tokens.
-#   3. Define the custom permission (scope) <prefix>/invoke.
+#   3. Define the custom permission (scope) shopassist/invoke.
 #   4. Create the M2M app client (has a secret, used by the Gateway and local tests).
 #   5. Create the users app client (no secret, used by people logging in from the CLI).
-#   6. Create the groups shop-admin and shop-viewer.
+#   6. Create the groups Group-ShopAssist-Admin and Group-ShopAssist-Viewer.
 #   7. Generate a random password per demo user, create alice, bob and carol, and put alice in
-#      shop-admin and bob in shop-viewer (carol gets no group).
+#      Group-ShopAssist-Admin and bob in Group-ShopAssist-Viewer (carol gets no group).
 #   8. Register the M2M client with AgentCore Identity as an OAuth2 credential provider.
 #
 # Who flows through which client (Cognito is the single OAuth2 authorization server for the PoC)
@@ -48,7 +48,7 @@ locals {
   domain        = "${var.name_prefix}-${var.account_id}"
   discovery_url = "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.this.id}/.well-known/openid-configuration"
   token_url     = "https://${local.domain}.auth.${var.region}.amazoncognito.com/oauth2/token"
-  groups        = toset(["shop-admin", "shop-viewer"])
+  groups        = toset(["Group-ShopAssist-Admin", "Group-ShopAssist-Viewer"])
 }
 
 # Step 1: the user pool. Self sign-up is off and the password rules are strict (12+ characters with
@@ -79,10 +79,11 @@ resource "aws_cognito_user_pool_domain" "this" {
 }
 
 # Step 3: a "resource server" is Cognito's name for an API that tokens can grant access to.
-# It defines the scope <prefix>/invoke, which machine tokens must carry to call the support tools.
+# It defines the scope shopassist/invoke (the same in every environment, each env has its own pool),
+# which machine tokens must carry to call the support tools.
 resource "aws_cognito_resource_server" "api" {
   user_pool_id = aws_cognito_user_pool.this.id
-  identifier   = var.name_prefix
+  identifier   = var.api_identifier
   name         = "${var.name_prefix}-api"
 
   scope {
@@ -120,7 +121,7 @@ resource "aws_cognito_user_pool_client" "users" {
 
 # ---------------------------------------------------------------- Demo users & groups
 
-# Step 6: the two groups. shop-admin may use every tool; shop-viewer only the read-only ones
+# Step 6: the two groups. Group-ShopAssist-Admin may use every tool; Group-ShopAssist-Viewer only the read-only ones
 # (that rule lives in infra/policies/*.cedar). Group names appear in the user's token.
 resource "aws_cognito_user_group" "this" {
   for_each     = local.groups
@@ -155,7 +156,7 @@ resource "aws_cognito_user" "this" {
   message_action = "SUPPRESS"
 }
 
-# Step 7c: put each user in their group (alice -> shop-admin, bob -> shop-viewer). Users whose group
+# Step 7c: put each user in their group (alice -> Group-ShopAssist-Admin, bob -> Group-ShopAssist-Viewer). Users whose group
 # is "" (carol) are skipped, which is how carol ends up with no access at all.
 resource "aws_cognito_user_in_group" "this" {
   for_each = { for u, g in var.demo_users : u => g if g != "" }

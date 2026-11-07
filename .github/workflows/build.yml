@@ -1,0 +1,45 @@
+# =====================================================================================================
+# .github/workflows/build.yml: after a merge to main, run every check and build every image again
+#
+# What this file does
+#   Runs the same checks as pull requests (_checks.yml) on the merged commit: tests, IaC lint, and each
+#   image built for arm64, started, checked and scanned. It does NOT push images and does NOT deploy.
+#
+# Where it fits
+#   A green build.yml run means "this commit is ready to deploy". The job summary shows the SHA to
+#   pass to deploy.yml. Images are pushed only by deploy.yml, right before deploying them, so ECR only
+#   ever holds deployed images and can keep exactly two (current + previous).
+#   The build also warms the GitHub Actions layer cache, so the deploy's own build is fast.
+# =====================================================================================================
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    uses: ./.github/workflows/_checks.yml
+
+  ready:
+    needs: checks
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Ready to deploy
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          {
+            echo "### Ready to deploy"
+            echo ""
+            echo "All checks passed for \`${SHA}\`. To deploy it: Actions → **deploy** → Run workflow"
+            echo "(target_env = prod, image_tag empty = this commit). Nothing has been pushed or deployed."
+          } >> "$GITHUB_STEP_SUMMARY"

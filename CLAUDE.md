@@ -13,8 +13,9 @@ This workspace is **Kiro-compatible**. All project instructions, specs and tasks
 ## Spec (read when working on a task)
 - Requirements: `.kiro/specs/strands-poc/requirements.md`
 - Design and contracts: `.kiro/specs/strands-poc/design.md`
-- **Tasks (work queue):** `.kiro/specs/strands-poc/tasks.md`
+- **Production delivery plan:** `.kiro/specs/prod-deploy/prod-deploy-pipeline.md`
+- **Tasks (current work queue):** `.kiro/specs/prod-deploy/prod-deploy-tasks.md` (the original `.kiro/specs/strands-poc/tasks.md` is complete)
 
 ## Claude Code specifics
-- "Next task" / "continue" means: follow `agent-workflow.md`. Pick the first unchecked task in `tasks.md`, implement it, verify it, tick it.
+- "Next task" / "continue" means: follow `agent-workflow.md`. Pick the first unchecked task in `prod-deploy-tasks.md`, implement it, verify it, tick it.
 - Use `uv run` for Python. Local reference dumps (Terraform provider schema, boto3 operation list) are in `.ref/` (git-ignored).

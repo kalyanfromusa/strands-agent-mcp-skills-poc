@@ -2,7 +2,8 @@
 # modules/agent_runtime/main.tf: the ShopAssist agent on AgentCore Runtime
 #
 # What this file does
-#   Runs the generic Strands agent (agent/app.py) on AgentCore Runtime as <prefix>_agent, with its
+#   Runs the generic Strands agent (agent/app.py, packaged as a container image) on AgentCore Runtime
+#   as <prefix>_<env>_agent, with its
 #   own permissions, its login check and its log group.
 #
 # Where it fits
@@ -14,11 +15,11 @@
 #
 # Step by step
 #   1. Create an IAM role that only AgentCore, acting for this account, may use.
-#   2. Allow it to call the Bedrock model, read its zip and the skills, write logs/traces/metrics and
+#   2. Allow it to call the Bedrock model, pull its image, read the skills, write logs/traces/metrics and
 #      get its workload identity token.
 #   3. Wait 15 seconds so AWS has spread the new permissions everywhere.
-#   4. Create the runtime from artifacts/agent.zip: plain HTTP protocol, a token check that only lets in
-#      shop-admin and shop-viewer users, and the settings the agent code reads at start-up.
+#   4. Create the runtime from the image <ECR repo>:<git sha>: plain HTTP protocol, a token check that
+#      only lets in Group-ShopAssist-Admin / -Viewer users, and the settings the agent code reads at start-up.
 #   5. Create its log group with a short retention.
 #
 # Key terms
@@ -36,7 +37,8 @@
 # runtime_name: the runtime's name, e.g. shopassist_agent (underscores only, no dashes allowed).
 # runtime_logs: the pattern that matches every AgentCore runtime log group in this account and region.
 locals {
-  runtime_name = "${var.name_prefix}_agent" # runtime names: [a-zA-Z][a-zA-Z0-9_]{0,47}
+  # Runtime names allow [a-zA-Z][a-zA-Z0-9_]{0,47}, so shopassist-prod becomes shopassist_prod_agent.
+  runtime_name = "${replace(var.name_prefix, "-", "_")}_agent"
   runtime_logs = "arn:aws:logs:${var.region}:${var.account_id}:log-group:/aws/bedrock-agentcore/runtimes/*"
 }
 
@@ -70,12 +72,15 @@ data "aws_iam_policy_document" "assume" {
 resource "aws_iam_role" "this" {
   name               = "${var.name_prefix}-agent-runtime-role"
   assume_role_policy = data.aws_iam_policy_document.assume.json
+
+  # The ceiling set by the platform stack: whatever the policy below says, the role can never do more.
+  permissions_boundary = var.permissions_boundary_arn
 }
 
 # Step 2a: what the agent may do:
 #   WorkloadIdentity:       get the token for its own workload identity.
 #   InvokeModel:            ask the Bedrock model (the agent's "brain") for the next step.
-#   ReadCodeZip:            download its own zip from the artifacts bucket.
+#   EcrAuth/EcrPullImage:   pull its own container image from ECR.
 #   ListSkills, ReadSkills: list and download the files under skills/ only.
 #   Logs/XRay/Metrics:      write logs, request traces and metrics.
 # Note there is no permission to call the tools directly: all tool calls go through the Gateway,
@@ -110,10 +115,16 @@ data "aws_iam_policy_document" "permissions" {
     ]
   }
 
+  # Pull its own container image from ECR (GetAuthorizationToken only works on "*").
   statement {
-    sid       = "ReadCodeZip"
-    actions   = ["s3:GetObject", "s3:GetObjectVersion"]
-    resources = ["arn:aws:s3:::${var.bucket}/${var.zip_key}"]
+    sid       = "EcrAuth"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "EcrPullImage"
+    actions   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"]
+    resources = [var.ecr_repository_arn]
   }
 
   # Cold-start sync of s3://bucket/skills/ to /tmp/skills.
@@ -186,9 +197,9 @@ resource "time_sleep" "iam" {
 # ---------------------------------------------------------------- Runtime
 
 # Step 4: the agent itself.
-#   agent_runtime_artifact / code_configuration: "direct code deploy". AgentCore downloads the zip
-#     from S3 and runs app.py with Python 3.12, so no Docker image is needed. Pinning version_id
-#     means a rebuilt zip (new S3 version) is picked up by the next `terraform apply`.
+#   agent_runtime_artifact / container_configuration: AgentCore pulls <ECR repo>:<git sha> and runs it
+#     (CMD python app.py, port 8080). A new image_tag is a diff => an in-place runtime update, which is
+#     how the pipeline rolls out a new version (and rolls back to the previous one).
 #   protocol_configuration HTTP: the agent is a plain web service (one request in, one reply out).
 #   network_configuration PUBLIC: the runtime has internet access and no private network (VPC) setup.
 #   authorizer_configuration: the login check described below (layer 1 of access control).
@@ -201,17 +212,8 @@ resource "aws_bedrockagentcore_agent_runtime" "this" {
   role_arn           = aws_iam_role.this.arn
 
   agent_runtime_artifact {
-    code_configuration {
-      entry_point = ["app.py"]
-      runtime     = "PYTHON_3_12"
-      code {
-        s3 {
-          bucket = var.bucket
-          prefix = var.zip_key # the object key of the zip, despite the name
-          # A new version id (new zip) is a diff => in-place runtime update.
-          version_id = var.zip_version_id
-        }
-      }
+    container_configuration {
+      container_uri = var.image_uri
     }
   }
 
@@ -225,7 +227,7 @@ resource "aws_bedrockagentcore_agent_runtime" "this" {
 
   # The token must come from our Cognito pool and the users client (allowed_clients), and its
   # cognito:groups field (custom_claim, a list of group names) must contain at least one of
-  # allowed_groups (CONTAINS_ANY): shop-admin or shop-viewer. alice and bob pass; carol, who has no
+  # allowed_groups (CONTAINS_ANY): Group-ShopAssist-Admin or Group-ShopAssist-Viewer. alice and bob pass; carol, who has no
   # group, gets "403 Forbidden".
   # Layer 1 of access control: the runtime rejects (403) tokens from other clients
   # or users outside the allowed groups, before any agent code runs (carol).

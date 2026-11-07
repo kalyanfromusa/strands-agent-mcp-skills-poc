@@ -1,9 +1,25 @@
 # Decisions
 - 2026-10-29 Use case: ShopAssist e-commerce support.
 - 2026-10-29 MCP tools via both a Lambda Gateway target (`orders`) and a FastMCP server on AgentCore Runtime (`support`).
-- 2026-10-29 Both Terraform and boto3 deployments, with a comparison doc. Deploy only one at a time.
-- 2026-10-29 Model: Claude Haiku on Bedrock (`us.anthropic.claude-haiku-5-5`).
+- 2026-10-29 Both Terraform and boto3 deployments, with a comparison doc. Deploy only one at a time. *(Superseded 2026-11-06: Terraform only.)*
+- 2026-10-29 Model: Claude Haiku on Bedrock (`us.anthropic.claude-haiku-5-5`). *(Superseded 2026-11-07: Haiku 4.5.)*
 - 2026-10-29 Skill→tool binding is hybrid: a skill declares `metadata.mcp-servers` and its instructions use plain tool names. The agent resolves names to `<server>___<tool>` and blocks undeclared servers.
 - 2026-10-29 Use the Strands built-in `AgentSkills` plugin rather than a custom loader.
-- 2026-10-29 Direct-code (zip) Runtime deployment, so no ECR or Docker is needed.
+- 2026-10-29 Direct-code (zip) Runtime deployment, so no ECR or Docker is needed. *(Superseded 2026-11-06: container images in ECR.)*
 - 2026-10-29 Per-user access: Runtime JWT custom-claim check (who may use the agent), user token passed through to the Gateway, AgentCore Policy in Cedar (which tools each user may call; tools/list is filtered). Demo users alice (admin), bob (viewer), carol (no access).
+- 2026-11-06 **Production delivery (supersedes some entries above).** Plan: `.kiro/specs/prod-deploy/prod-deploy-pipeline.md`.
+  - Terraform is the only deploy path. The boto3 path is removed (supersedes "Both Terraform and boto3"). The live boto3 stack in 438750401181 is torn down in P1.
+  - All workloads ship as arm64 container images in ECR, tagged with the full git SHA (immutable). This supersedes "Direct-code (zip) Runtime deployment". The orders Lambda is an image too.
+  - Terraform also does image rollouts (`-var image_tag`). The pipeline doesn't call UpdateAgentRuntime directly, and there's no `ignore_changes` on images.
+  - CI/CD is GitHub Actions (public repo) with OIDC roles. PRs get summary-only plans. A merge builds images only. Deploy is **manual** (`workflow_dispatch`) with approval on the `prod` environment. Logs never show full plan or apply output.
+  - Environments `dev` and `prod` are both defined, but only `prod` is deployed. Names are `shopassist-<env>-*` / `shopassist_<env>_*`.
+  - Access groups are renamed to `Group-ShopAssist-Admin` / `Group-ShopAssist-Viewer` (they were `shop-admin` / `shop-viewer`).
+  - Entra ID is federated into Cognito via OIDC. Rights come from directory groups: `AD-ShopAssist-<Env>-*` → app roles `AppRole-ShopAssist-*` → Cognito groups, through a pre-token-generation role-mapper Lambda. Cloud-only Entra groups; the P2 trial for group→app-role assignment, with a `groups`-claim fallback after it ends.
+  - The simulated on-prem API is a local FastAPI service reached through an ngrok free static domain, as Gateway OpenAPI target `onprem`. It is protected by Cognito client-credentials JWTs that it validates itself.
+  - ECR keeps exactly 2 images per repo (current + previous). Images are pushed only by the deploy job; merges build and scan without pushing.
+  - 2026-11-07: images are built **only in GitHub Actions** (native arm64 runners); there's no local Docker build. The first deploy runs through the pipeline.
+  - 2026-11-07: **no S3 versioning** (the state bucket is set to Suspended; the artifacts bucket has none). Trade-off: no restore of old state or skills versions.
+  - 2026-11-07: the user owns **nalamone.com** (Cloudflare DNS). The on-prem API is reached through **Cloudflare Tunnel** at `onprem-prod.nalamone.com` (this supersedes ngrok). The Cognito sign-in page uses the custom domain **`strands-agents-poc.nalamone.com`** (prod; ACM certificate in us-east-1, DNS in Cloudflare), set up in P7.
+  - Pipeline secrets (Entra client secret, smoke-test users file, plan-encryption key) are **GitHub environment secrets** on `prod` (`main` only, required reviewer), not Secrets Manager. AWS access uses OIDC only, with no stored keys.
+  - AWS profile `personal` (account 438750401181) is used per command for app resources and deploys, never for the Claude session itself.
+  - 2026-11-07: model **Claude Haiku 4.5** (`us.anthropic.claude-haiku-4-5-20251001-v1:0`), because the deploy account 438750401181 hasn't accepted the Haiku 5.5 agreement. It's a `model_id` change in `envs/*.tfvars`, so switching back later is one line.

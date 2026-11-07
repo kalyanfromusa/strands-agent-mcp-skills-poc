@@ -25,7 +25,7 @@ Where it fits
 Step by step (passthrough mode, the deployed setup)
     1. A user (for example alice) logs in to Amazon Cognito and gets a token: a signed JWT that says who she is.
     2. She calls the agent with that token. The AgentCore Runtime checks it first: users outside the
-       `shop-admin` / `shop-viewer` groups (carol) are refused there, before any agent code runs. Because the
+       `Group-ShopAssist-Admin` / `Group-ShopAssist-Viewer` groups (carol) are refused there, before any agent code runs. Because the
        Runtime is set up to forward the `Authorization` header (a "request header allowlist"), the agent code
        receives the token.
     3. `app.py` extracts the raw token (`bearer_from_header`) and stores it (`bind_request_token`).

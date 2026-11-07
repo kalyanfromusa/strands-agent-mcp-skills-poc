@@ -5,10 +5,10 @@
     .venv/Scripts/python.exe scripts/invoke_agent.py --sigv4 --prompt ".."  # runtime without a JWT authorizer
 
 With --user (default alice) the script signs in to Cognito as that demo user (USER_PASSWORD_AUTH,
-credentials from .deploy/users.json) and calls the Runtime over HTTPS with the user's Bearer token.
+credentials from .deploy/<env>/users.json) and calls the Runtime over HTTPS with the user's Bearer token.
 A runtime with a JWT authorizer does not accept SigV4; --sigv4 uses boto3 `invoke_agent_runtime`.
 
-The runtime session id (>= 33 chars) is kept per user in .deploy/session-<user>.txt so a conversation
+The runtime session id (>= 33 chars) is kept per user in .deploy/<env>/session-<user>.txt so a conversation
 continues across runs; --new-session (or typing /new in interactive mode) starts a fresh one.
 """
 
@@ -18,15 +18,15 @@ continues across runs; --new-session (or typing /new in interactive mode) starts
 #   prints, so the longer explanation lives here.)
 #
 # Where it fits
-#   Run it after a deployment (Terraform or infra/boto3), which writes .deploy/outputs.json (addresses
-#   and ids of what was deployed) and .deploy/users.json (the demo users' passwords).
+#   Run it after a Terraform deployment, which writes .deploy/<env>/outputs.json (addresses
+#   and ids of what was deployed) and .deploy/<env>/users.json (the demo users' passwords).
 #   `scripts/demo_access.py` reuses the functions in this file for its automated scenarios.
 #
 # The sign-in flow, step by step
-#   1. Read .deploy/outputs.json to find the region, the agent's ARN and the Cognito app client id.
-#   2. Sign in to Amazon Cognito with the user's name and password (from .deploy/users.json).
+#   1. Read .deploy/<env>/outputs.json to find the region, the agent's ARN and the Cognito app client id.
+#   2. Sign in to Amazon Cognito with the user's name and password (from .deploy/<env>/users.json).
 #      Cognito answers with an access token: a signed, short-lived "pass" that says who the user is
-#      and which groups they belong to (alice: shop-admin, bob: shop-viewer, carol: none).
+#      and which groups they belong to (alice: Group-ShopAssist-Admin, bob: Group-ShopAssist-Viewer, carol: none).
 #   3. Send the message to the agent with an HTTPS POST to the Runtime's address, with the token in
 #      the "Authorization: Bearer <token>" header and a session id in another header.
 #   4. The Runtime checks the token before any agent code runs. carol has no allowed group, so she
@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -58,9 +59,11 @@ from typing import Any
 from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parent.parent
-# Folder written by the deployment: outputs.json, users.json and the saved session ids.
-# It is git-ignored because users.json holds passwords.
-DEPLOY = ROOT / ".deploy"
+# Folder written by the deployment of one environment: .deploy/<env>/ with outputs.json, users.json
+# and the saved session ids. The environment comes from SHOPASSIST_ENV (default prod). The folder is
+# git-ignored because users.json holds passwords.
+ENVIRONMENT = os.environ.get("SHOPASSIST_ENV", "prod")
+DEPLOY = ROOT / ".deploy" / ENVIRONMENT
 # Terminal codes that print text dimmed (grey) and then switch back to normal.
 DIM, RESET = "\033[2m", "\033[0m"
 # The HTTP header the AgentCore Runtime reads to know which conversation (session) a message belongs to.
@@ -83,7 +86,7 @@ class AccessDenied(Exception):
 def load_json(path: Path) -> dict[str, Any]:
     """Read a JSON file from .deploy/, or stop with a hint to deploy first if it is missing."""
     if not path.exists():
-        raise SystemExit(f"{path} not found. Deploy first (Terraform or infra/boto3) or pass the values as flags.")
+        raise SystemExit(f"{path} not found. Deploy first (Terraform) or pass the values as flags.")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -250,10 +253,10 @@ def main() -> int:
     """
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--prompt", help="send one prompt and exit")
-    parser.add_argument("--user", default="alice", help="demo user from .deploy/users.json (default alice)")
+    parser.add_argument("--user", default="alice", help="demo user from .deploy/<env>/users.json (default alice)")
     parser.add_argument("--sigv4", action="store_true", help="use SigV4 (boto3) instead of a user token")
-    parser.add_argument("--arn", help="agent runtime ARN (default: .deploy/outputs.json)")
-    parser.add_argument("--region", help="AWS region (default: .deploy/outputs.json)")
+    parser.add_argument("--arn", help="agent runtime ARN (default: .deploy/<env>/outputs.json)")
+    parser.add_argument("--region", help="AWS region (default: .deploy/<env>/outputs.json)")
     parser.add_argument("--outputs", default=str(DEPLOY / "outputs.json"))
     parser.add_argument("--new-session", action="store_true", help="start a new runtime session")
     args = parser.parse_args()

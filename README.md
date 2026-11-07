@@ -61,6 +61,20 @@ smartwatch from order 1004?" or "My order 1006 hasn't arrived, I'm C003". The em
 is 8000, so pass `--port` if 8000 is taken. Start it with `--role viewer` to see bob's read-only
 experience. `run_local.py --prompt "..."` sends one message and exits.
 
+**Browser chat instead of the terminal:** run the agent as an HTTP server and open the chat UI, which
+has clickable sample conversations per user ([docs/11-chat-ui.md](docs/11-chat-ui.md)):
+
+```powershell
+uv run python scripts/local_gateway.py --port 8765                       # terminal 1 (add --role viewer for bob)
+$env:PYTHONIOENCODING="utf-8"; $env:GATEWAY_AUTH_MODE="none"; $env:GATEWAY_URL="http://localhost:8765/mcp"
+$env:SKILLS_DIR="$PWD\skills"; $env:AWS_REGION="us-east-1"
+uv run python agent/app.py                                               # terminal 2: agent on :8080
+uv run python scripts/chat_ui.py --local --open                          # terminal 3: http://127.0.0.1:8790
+```
+
+In the page, click *Dummy token: alice (admin)* or *bob (viewer)*. Locally the token isn't checked:
+the tools come from the emulator's `--role`.
+
 This flow has been tested end to end with Bedrock: an eligible return (1042), a refused
 out-of-window electronics return with a ticket offer (1004), a ticket (1006), an off-topic
 redirect, and the viewer role explaining the missing permission.
@@ -83,7 +97,11 @@ Smoke test (from the repo root):
 uv run python scripts/invoke_agent.py --user alice --prompt "Where is order 1042?"
 uv run python scripts/invoke_agent.py --user carol --prompt "Hello"     # expect HTTP 403
 uv run python scripts/demo_access.py                                   # alice / bob / carol / direct-Gateway matrix
+uv run python scripts/chat_ui.py --open                                # browser chat: paste a user's JWT
+uv run python scripts/chat_ui.py --print-token alice                   # prints alice's access token
 ```
+
+To get a token from the AWS console (CloudShell), see [docs/11-chat-ui.md](docs/11-chat-ui.md#option-b-aws-console-with-cloudshell).
 
 Full guides: [Terraform](docs/04-deploy-terraform.md) · [boto3](docs/05-deploy-boto3.md). The
 deployment paths haven't been run against AWS yet. Treat them as instructions and see
@@ -97,7 +115,7 @@ deployment paths haven't been run against AWS yet. Treat them as instructions an
 | `skills/` | `order-tracking`, `returns-and-refunds` (+ `references/return-policy.md`), `support-ticketing` |
 | `mcp_servers/` | `common/` (store, return rules), `orders_lambda/` (handler + `tools_schema.json`), `support_mcp/` (FastMCP server + `faq.json`) |
 | `data/seed.json` | Demo customers and orders (relative dates) |
-| `scripts/` | `build.py`, `local_gateway.py`, `run_local.py`, `invoke_agent.py`, `demo_access.py`, `seed_data.py` |
+| `scripts/` | `build.py`, `local_gateway.py`, `run_local.py`, `invoke_agent.py`, `demo_access.py`, `seed_data.py`, `chat_ui.py` + `chat_ui.html` (browser chat) |
 | `infra/terraform/` | Root module + `modules/{data,identity,lambda_tools,mcp_runtime,gateway,agent_runtime}` |
 | `infra/boto3/` | `deploy.py`, `destroy.py`, `common.py`, `steps/*.py` |
 | `infra/policies/` | Cedar policy templates shared by both paths |
@@ -116,6 +134,8 @@ deployment paths haven't been run against AWS yet. Treat them as instructions an
 7. [Cost](docs/07-cost.md)
 8. [Extending with skills and tools](docs/08-extending-with-skills.md)
 9. [Troubleshooting](docs/09-troubleshooting.md)
+10. [CI/CD with container images](docs/10-ci-cd.md) (optional)
+11. [Browser chat UI](docs/11-chat-ui.md): local and deployed testing, getting a JWT from the AWS console
 
 ## Cost
 

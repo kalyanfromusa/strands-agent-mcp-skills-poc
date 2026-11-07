@@ -17,20 +17,27 @@
 # =====================================================================================================
 
 # Used to name the user pool, its domain and the clients.
+# name_prefix includes the environment, e.g. shopassist-prod.
 variable "name_prefix" { type = string }
+
+# The OAuth resource-server id: scopes are "<api_identifier>/invoke". Same in every environment.
+variable "api_identifier" {
+  type    = string
+  default = "shopassist"
+}
 variable "region" { type = string }
 variable "account_id" { type = string }
 
 # The three demo personas that show the access levels:
-#   alice -> shop-admin  (may use every tool)
-#   bob   -> shop-viewer (read-only tools only)
+#   alice -> Group-ShopAssist-Admin  (may use every tool)
+#   bob   -> Group-ShopAssist-Viewer (read-only tools only)
 #   carol -> no group    (the agent refuses her before doing anything)
 variable "demo_users" {
   description = "Demo users => Cognito group (\"\" = no group). design.md section 8."
   type        = map(string)
   default = {
-    alice = "shop-admin"
-    bob   = "shop-viewer"
+    alice = "Group-ShopAssist-Admin"
+    bob   = "Group-ShopAssist-Viewer"
     carol = ""
   }
 }

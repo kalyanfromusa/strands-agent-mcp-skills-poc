@@ -11,17 +11,17 @@
 # Step by step
 #   1. Refuse to run on Terraform older than 1.9.
 #   2. Download the four providers listed below, within the allowed version ranges.
-#   3. Keep the state (the record of what was created) in a local file, because no backend is set.
+#   3. Keep the state (the record of what was created) in S3, one file per environment.
 #
 # Key terms
 #   Provider: a plugin that knows how to talk to one system. "aws" creates AWS resources; "local"
 #     writes files on your computer; "random" makes passwords; "time" adds deliberate pauses.
 #   State: Terraform's record of what it created, kept in terraform.tfstate (git-ignored).
-#   Backend: where the state is stored. None here, so it stays on your computer.
+#   Backend: where the state is stored: the S3 state bucket, key main/<env>.tfstate, with a lock file.
 # =====================================================================================================
 
 terraform {
-  required_version = ">= 1.9" # cross-variable validation in variables.tf needs 1.9+
+  required_version = ">= 1.10" # cross-variable validation (1.9) and the S3 backend lock file (1.10)
 
   required_providers {
     # AWS provider: creates every cloud resource (S3, DynamoDB, Lambda, Cognito, AgentCore, IAM, ...).
@@ -47,6 +47,8 @@ terraform {
     }
   }
 
-  # No backend block on purpose: local state is enough for a single-user PoC
-  # (state files are git-ignored). Add an S3 backend before sharing this stack.
+  # Remote state in the S3 state bucket (created by ../bootstrap), one file per environment.
+  # bucket, key, region and use_lockfile come from envs/<env>.backend.hcl:
+  #   terraform init -backend-config=envs/prod.backend.hcl
+  backend "s3" {}
 }

@@ -1,0 +1,85 @@
+# =====================================================================================================
+# .github/actions/build-image: build one ShopAssist image for linux/arm64, start it, check it, scan it
+#
+# What this file does
+#   A "composite action": a reusable list of steps that the workflows call with `uses:`. It
+#     1. builds the image natively on the arm64 runner (no emulation), using the GitHub Actions cache;
+#     2. loads it into the runner's Docker as local/<kind>:<tag> (nothing is pushed here);
+#     3. starts it and calls it like AWS would (scripts/ci_image_checks.sh);
+#     4. scans it for known vulnerabilities with Trivy and fails on fixable HIGH/CRITICAL ones.
+#
+# Where it fits
+#   ci.yml and build.yml (via _checks.yml) run it for every pull request and merge. deploy.yml runs it
+#   in the approved apply job for any image that isn't in ECR yet, then pushes the result. Only images
+#   that passed all four steps can ever be pushed.
+#
+# Key terms
+#   Composite action: steps packaged for reuse, like a function.
+#   Trivy: an open-source scanner that compares the image's packages with public vulnerability lists.
+#   ignore-unfixed: don't fail on vulnerabilities that have no fix yet (nothing could be done anyway).
+# =====================================================================================================
+name: Build and check a ShopAssist image
+description: Build linux/arm64, run the container checks, Trivy scan. Loads local/<kind>:<tag>; never pushes.
+
+inputs:
+  kind:
+    description: agent | support_mcp | orders_lambda
+    required: true
+  dockerfile:
+    description: Dockerfile path relative to the source folder
+    required: true
+  tag:
+    description: Image tag (the full git SHA)
+    required: true
+  source:
+    description: Folder holding the checked-out source (the build context)
+    required: false
+    default: "."
+
+outputs:
+  image:
+    description: The local image reference that was built and checked
+    value: local/${{ inputs.kind }}:${{ inputs.tag }}
+
+runs:
+  using: composite
+  steps:
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+    # Step 1-2: build natively for arm64 and load the result into the local Docker.
+    - name: Build ${{ inputs.kind }} (linux/arm64)
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      with:
+        context: ${{ inputs.source }}
+        file: ${{ inputs.source }}/${{ inputs.dockerfile }}
+        platforms: linux/arm64
+        load: true
+        push: false
+        tags: local/${{ inputs.kind }}:${{ inputs.tag }}
+        # A plain single-platform image (no attestation index), which AgentCore and Lambda expect.
+        provenance: false
+        sbom: false
+        labels: |
+          org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          org.opencontainers.image.revision=${{ inputs.tag }}
+        cache-from: type=gha,scope=${{ inputs.kind }}
+        cache-to: type=gha,mode=max,scope=${{ inputs.kind }}
+
+    # Step 3: does it start and answer like AWS expects?
+    - name: Container checks (${{ inputs.kind }})
+      shell: bash
+      env:
+        KIND: ${{ inputs.kind }}
+        IMAGE: local/${{ inputs.kind }}:${{ inputs.tag }}
+        SRC: ${{ inputs.source }}
+      run: bash "$SRC/scripts/ci_image_checks.sh" "$KIND" "$IMAGE"
+
+    # Step 4: known vulnerabilities with a fix available fail the build.
+    - name: Trivy scan (${{ inputs.kind }})
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+      with:
+        image-ref: local/${{ inputs.kind }}:${{ inputs.tag }}
+        severity: HIGH,CRITICAL
+        ignore-unfixed: true
+        exit-code: "1"
+        format: table

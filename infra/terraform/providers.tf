@@ -25,7 +25,9 @@ provider "aws" {
   # (The optional budget in main.tf is account-wide, not tag-filtered: see the note there.)
   default_tags {
     tags = {
-      project = var.name_prefix
+      project     = var.name_prefix
+      environment = var.environment
+      managed-by  = "terraform"
     }
   }
 }

@@ -25,11 +25,6 @@ variable "repo_root" {
   type        = string
 }
 
-variable "artifact_files" {
-  description = "Map of logical name => local zip path produced by scripts/build.py."
-  type        = map(string)
-}
-
 variable "skills_dir" {
   description = "Local skills/ folder, mirrored to s3://<bucket>/skills/."
   type        = string

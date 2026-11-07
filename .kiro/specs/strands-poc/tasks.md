@@ -6,6 +6,6 @@
 - [x] 4. boto3 deploy/destroy (static check)
 - [x] 5. Local end-to-end run (local gateway + real Bedrock)
 - [x] 6. Deploy with Terraform → smoke test → destroy
-- [ ] 7. Deploy with boto3 → smoke test → destroy
+- [x] 7. Deploy with boto3 → smoke test → destroy
 - [x] 8. Per-user access demo (alice/bob/carol) verified on the deployed stack
 - [x] 9. Docs + README

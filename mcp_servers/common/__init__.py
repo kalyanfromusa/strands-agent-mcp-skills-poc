@@ -5,6 +5,6 @@ What this package does
     tickets) and `rules.py` (the return-eligibility policy).
 
 Where it fits
-    `scripts/build.py` copies this folder, as the package `common`, into the orders Lambda zip and the
-    support MCP server zip, so both deployed services run exactly the same rules and data code.
+    The Dockerfiles copy this folder, as the package `common`, into the orders Lambda image and the
+    support MCP server image, so both deployed services run exactly the same rules and data code.
 """

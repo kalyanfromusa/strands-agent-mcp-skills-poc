@@ -22,6 +22,8 @@
 # Same keys as .deploy/outputs.json (design.md section 6).
 output "region" { value = var.region }
 output "account_id" { value = local.account_id }
+output "environment" { value = var.environment }
+output "image_tag" { value = var.image_tag }
 output "artifacts_bucket" { value = module.data.artifacts_bucket }
 output "skills_s3_uri" { value = module.data.skills_s3_uri }
 output "agent_runtime_arn" { value = module.agent_runtime.runtime_arn }
@@ -50,9 +52,9 @@ output "users_file" {
 
 # Copy-paste commands: ask the agent a question as alice, then compare what alice, bob and carol may do.
 output "invoke_command" {
-  description = "Smoke test from the repo root. The agent runtime only accepts Cognito user tokens (no SigV4), so use the script, which reads .deploy/outputs.json and .deploy/users.json."
+  description = "Smoke test from the repo root. The agent runtime only accepts Cognito user tokens (no SigV4), so use the scripts, which read .deploy/<env>/outputs.json and users.json (SHOPASSIST_ENV, default prod)."
   value       = <<-EOT
-    uv run python scripts/invoke_agent.py --user alice --prompt "Where is my order 1042?"
-    uv run python scripts/demo_access.py
+    SHOPASSIST_ENV=${var.environment} uv run python scripts/invoke_agent.py --user alice --prompt "Where is my order 1042?"
+    SHOPASSIST_ENV=${var.environment} uv run python scripts/demo_access.py
   EOT
 }

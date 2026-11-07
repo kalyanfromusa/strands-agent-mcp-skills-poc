@@ -1,21 +1,21 @@
 # syntax=docker/dockerfile:1.7
 # =====================================================================================================
-# mcp_servers/support_mcp/Dockerfile: the `support` MCP server as a container image (container mode)
+# mcp_servers/support_mcp/Dockerfile: the `support` MCP server as a container image
 #
 # What this file does
-#   Packages server.py, faq.json, the shared `common` package and the libraries in requirements.txt
-#   into a linux/arm64 image that AgentCore Runtime can run instead of dist/support_mcp.zip. The server
-#   speaks stateless streamable HTTP MCP on 0.0.0.0:8000 at /mcp, exactly as in zip mode.
+#   Packages server.py, faq.json, the shared `common` package and the exact library versions in
+#   requirements.lock.txt (pinned from uv.lock, with hashes) into a linux/arm64 image for AgentCore
+#   Runtime. The server speaks stateless streamable HTTP MCP on 0.0.0.0:8000 at /mcp.
 #
 # Where it fits
-#   Built by .github/workflows/deploy.yml, pushed to the ECR repository shopassist-support-mcp
-#   (infra/terraform/ci), rolled out with scripts/ci/update_runtime_image.py, after which the Gateway's
-#   `support` target is re-synchronized so it re-reads the tool list.
+#   Built only by GitHub Actions (arm64 runner); deploy.yml pushes it to the ECR repository
+#   shopassist-support-mcp (infra/terraform/platform), tagged with the git SHA. Terraform points the
+#   support runtime at it and then re-synchronizes the Gateway's `support` target (it re-reads the tools).
 #
 # Step by step
 #   1. Start from the official Python 3.12 slim image for arm64.
-#   2. Copy in uv and install the requirements (one cached layer).
-#   3. Lay the code out like scripts/build.py lays out the zip:
+#   2. Copy in uv and install the pinned, hash-checked requirements (one cached layer).
+#   3. Lay the code out flat:
 #        /app/server.py, /app/faq.json, /app/common/{__init__,store,rules}.py
 #      so `from common.store import get_store` works with /app as the working directory.
 #   4. Switch to an unprivileged user and start `python server.py`.
@@ -27,13 +27,13 @@
 # Key terms
 #   MCP (Model Context Protocol): the standard way an agent lists and calls tools.
 #   Stateless streamable HTTP: each MCP request stands alone, which is what AgentCore Runtime requires.
-#   common: the shared data/rules package also bundled into the orders Lambda zip.
+#   common: the shared data/rules package, also copied into the orders Lambda image.
 # =====================================================================================================
 
 FROM --platform=linux/arm64 python:3.12-slim
 
 # COMPILE_BYTECODE=1 (default, used in CI on native arm64): pre-compile .pyc for a faster cold start.
-# Pass --build-arg COMPILE_BYTECODE=0 for local builds under QEMU emulation, where compiling the
+# Pass --build-arg COMPILE_BYTECODE=0 for a build under QEMU emulation (x86 runner), where compiling the
 # dependencies takes ~10 minutes instead of seconds.
 ARG COMPILE_BYTECODE=1
 
@@ -48,10 +48,10 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 # Step 2: dependencies first (cache-friendly).
-COPY mcp_servers/support_mcp/requirements.txt /tmp/requirements.txt
-RUN uv pip install --system -r /tmp/requirements.txt && rm /tmp/requirements.txt
+COPY mcp_servers/support_mcp/requirements.lock.txt /tmp/requirements.lock.txt
+RUN uv pip install --system --require-hashes -r /tmp/requirements.lock.txt && rm /tmp/requirements.lock.txt
 
-# Step 3: same layout as dist/support_mcp.zip (scripts/build.py: build_support_mcp).
+# Step 3: flat layout, so `from common.store import ...` works from /app.
 COPY mcp_servers/support_mcp/server.py mcp_servers/support_mcp/faq.json /app/
 COPY mcp_servers/common/ /app/common/
 

@@ -167,3 +167,4 @@ Temporary event accounts (AWS Workshop Studio and similar) behave differently fr
 | The agent doesn't use a newly uploaded skill | Skills load once per session. Use `--new-session` |
 | Gateway lists no `support___*` tools | The MCP runtime wasn't `READY` when the target was created, or the target's OAuth config is wrong. Check the target status, and re-sync with `aws bedrock-agentcore-control synchronize-gateway-targets` |
 | Cognito domain `shopassist-<account>` already taken | Domains are global. Change the prefix (Terraform `name_prefix`, boto3 `--prefix`) |
+| `agent/app.py` run locally exits silently on the first message (Windows) | Set `PYTHONIOENCODING=utf-8`. Strands' error notes contain characters a cp1252 console can't print. See [11-chat-ui.md](11-chat-ui.md#troubleshooting) |

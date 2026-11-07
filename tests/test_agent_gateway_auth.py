@@ -44,7 +44,7 @@ def test_bearer_from_header():
 
 
 def test_jwt_claims_unsigned_token():
-    claims = {"sub": "u-123", "cognito:groups": ["shop-viewer"], "exp": 1999999999, "pad": "x?>"}
+    claims = {"sub": "u-123", "cognito:groups": ["Group-ShopAssist-Viewer"], "exp": 1999999999, "pad": "x?>"}
     for n in range(4):  # payload lengths that need 0..3 padding characters
         c = {**claims, "n": "y" * n}
         assert ga.jwt_claims(make_jwt(c)) == c

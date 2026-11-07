@@ -10,7 +10,7 @@ What this file does
 
 Where it fits
     Used by the orders Lambda (`orders_lambda/handler.py`) and by the support MCP server
-    (`support_mcp/server.py`). `scripts/build.py` copies this folder into both deployment zips, and
+    (`support_mcp/server.py`). Both container images copy this folder in (see their Dockerfiles), and
     `scripts/seed_data.py` uses `load_seed_orders` to fill the DynamoDB orders table.
 
     Why two stores? `MemoryStore` keeps everything in the computer's memory, filled from

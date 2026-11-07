@@ -1,13 +1,12 @@
 // Policy "viewer_read_only": look-but-don't-change access for shop viewers.
 //
-// What it does: lets members of the shop-viewer Cognito group (the demo user bob) list and call only
+// What it does: lets members of the Group-ShopAssist-Viewer Cognito group (the demo user bob) list and call only
 // the five tools that read data: get_order, list_customer_orders, check_return_eligibility,
 // get_ticket and search_faq. The tools that change data (create_return in the orders target and
 // create_ticket in the support target) are not in the list, so bob does not even see them in
 // tools/list. (Keep their full prefixed names out of this file: a test checks they never appear here.)
 //
-// Where it fits: uploaded into the AgentCore policy engine by Terraform (modules/gateway) and boto3
-// (infra/boto3/steps/policy.py). Before upload, the Gateway ARN placeholder below is replaced with the
+// Where it fits: uploaded into the AgentCore policy engine by Terraform (modules/gateway). Before upload, the Gateway ARN placeholder below is replaced with the
 // real Gateway ARN (Amazon Resource Name, its unique id), so this permit only applies to our Gateway.
 // Note: this whole file, comments included, is the policy text sent to AWS, so editing a comment
 // here also shows up as a change on the next deploy.
@@ -22,9 +21,9 @@
 //   principal = any caller with a valid login token (AgentCore::OAuthUser).
 //   action    = one of the listed tools. Names are <target>___<tool> (three underscores).
 //   resource  = exactly our Gateway.
-//   when      = only if the token's cognito:groups field contains "shop-viewer".
+//   when      = only if the token's cognito:groups field contains "Group-ShopAssist-Viewer".
 //
-// Members of the shop-viewer group may only use read-only tools.
+// Members of the Group-ShopAssist-Viewer group may only use read-only tools.
 // Listing the allowed actions (rather than forbidding the write ones) means any new tool is denied by default.
 permit(
   principal is AgentCore::OAuthUser,
@@ -39,5 +38,5 @@ permit(
 )
 when {
   principal.hasTag("cognito:groups") &&
-  principal.getTag("cognito:groups") like "*\"shop-viewer\"*"
+  principal.getTag("cognito:groups") like "*\"Group-ShopAssist-Viewer\"*"
 };

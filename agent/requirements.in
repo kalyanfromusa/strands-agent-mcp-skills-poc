@@ -1,0 +1,7 @@
+# Generic agent runtime: direct dependencies (ranges). scripts/pin_requirements.py turns this into requirements.lock.txt.
+strands-agents>=1.62
+bedrock-agentcore>=1.25
+mcp>=2.1
+boto3>=1.43
+httpx>=0.28
+pyyaml>=6

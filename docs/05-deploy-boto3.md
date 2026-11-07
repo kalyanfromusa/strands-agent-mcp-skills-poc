@@ -148,3 +148,16 @@ there. The name-based checks in [04-deploy-terraform.md § Verify](04-deploy-ter
 apply unchanged. Resource and role names are the same in both paths.
 Budgets don't appear in the tagging API. Check with
 `aws budgets describe-budgets --account-id <account> --query "Budgets[].BudgetName"`.
+
+On Windows Git Bash, set `MSYS_NO_PATHCONV=1` before the `aws logs describe-log-groups` checks. Otherwise
+Git Bash rewrites the `/aws/...` prefix into a Windows path and the call fails validation.
+
+## Verified run (2026-10-29)
+
+Deployed with `deploy.py` to a Workshop Studio account in us-east-1 (2m38s, first attempt, no fixes needed), then
+destroyed with `destroy.py --yes` (1m31s). The name-based leftover checks found nothing.
+
+- `invoke_agent.py --user alice --prompt "Where is my order 1042?"` → delivered via UPS; skill `order-tracking`, tool `orders___get_order`.
+- `scripts/demo_access.py`: every scenario matched the Terraform run (a ✅ alice creates the return; b ✅ bob gets no
+  `create_return`; c ✅ carol HTTP 401; d ✅ bob `tools/list` shows 5 tools, `tools/call create_return` denied by policy;
+  alice `tools/list` shows 7 tools).

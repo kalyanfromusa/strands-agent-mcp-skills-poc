@@ -20,6 +20,9 @@
 output "gateway_id" { value = aws_bedrockagentcore_gateway.this.gateway_id }
 output "gateway_arn" { value = aws_bedrockagentcore_gateway.this.gateway_arn }
 
+# Target names, so the root stack can re-synchronize a target after its server changes.
+output "support_target_name" { value = aws_bedrockagentcore_gateway_target.support.name }
+
 # The depends_on below holds back this value, and so delays everything that uses it (the agent
 # runtime), until the Gateway is fully set up.
 output "gateway_url" {

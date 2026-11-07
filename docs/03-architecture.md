@@ -88,7 +88,7 @@ Notes:
   conversation continues across runs. `--new-session` starts a new one.
 - One Strands `Agent` lives per process, and the Runtime gives each session its own microVM. That
   gives you conversation memory per session without a memory store. Calls are serialised with a
-  lock.
+  lock. See [Conversation memory](#conversation-memory) for how and how long it remembers.
 - The response is `{"response": str, "skills_used": [...], "tools_used": [...]}`. The CLI prints the
   reply and then a dim `skills: ... | tools: ...` line.
 
@@ -166,6 +166,88 @@ sequenceDiagram
 Why hybrid rather than putting full tool names in the skill: the skill stays portable (no target
 prefix, no endpoint), the agent can still stop a skill from using servers it didn't declare, and the
 model gets the exact names at the moment it needs them.
+
+### Why the binding exists
+
+Skills say `create_return`. The Gateway exposes `orders___create_return`, and which tools exist
+depends on the caller. Something has to bridge the two:
+
+| Option | What breaks |
+|---|---|
+| Full Gateway names in skills | Skills depend on Gateway target names. Renaming a target or moving a tool means editing every skill that mentions it |
+| Plain names, and the model works out the mapping | Usually works, but not reliably: the model sometimes calls `create_return` as written and gets "unknown tool" |
+| Plain names plus a resolver (`SkillBinding`) | One plugin to maintain |
+
+What each part buys:
+
+1. **The `[Tool binding]` block.** The most useful part. It gives the model exact names when it
+   needs them, and it's what makes bob's experience work: his tool list has no `create_return`, but
+   the returns skill still mentions it. "Not available to the current user: create_return" turns that
+   gap into a clean "your account doesn't have permission", which `demo_access.py` scenario b checks
+   for. Without it the skill points at a tool the model can't see.
+2. **The pre-call check.** All 7 tools are registered for every request. The check makes the model
+   activate a skill first, so it follows the skill's steps (for example eligibility before return). It
+   also limits each skill to the servers it declares: a new skill uploaded to S3 that only declares
+   `support` can't make the agent call `orders` tools. That matters because skills change behaviour
+   without code review.
+3. **Startup validation and usage tracking.** Typos in skill tool names show up in the logs.
+   `skills_used` / `tools_used` feed the CLI's dim line and the `demo_access.py` pass conditions.
+
+**It's a behaviour layer, not a security control.** It runs inside the agent process and guides the
+model. Enforcement is outside the agent: Cedar hides and denies tools per user (scenario d), and
+`create_return` re-checks eligibility server-side. Removing the binding wouldn't let bob do anything
+new.
+
+**Costs:** one plugin with three hooks tied to Strands' event API; the binding text is part of the
+~800–1,000 tokens added on activation; and an occasional extra model call when a premature tool call
+is cancelled and the model corrects itself.
+
+**Could it go?** The pre-call check is the optional part, if you trust the model and the tools to
+enforce step order. Dropping the whole plugin means full Gateway names in skills plus a generic
+system-prompt rule ("if a tool a skill mentions isn't in your list, say the user lacks permission"):
+simpler, but skills become tied to target names and the permission message depends on the model
+following a general rule.
+
+## Conversation memory
+
+The agent remembers a conversation in process memory only. There is no memory store: the
+"memory" is the message history of one Strands `Agent` object, and AgentCore Runtime keeps that
+object alive by giving each session its own microVM.
+
+```
+session id ──► microVM ──► app.py process ──► AgentRuntime ──► Agent
+                                                               ├─ messages  (conversation history)
+                                                               └─ state     (activated skills)
+```
+
+Turn by turn:
+
+1. **The client picks the conversation.** `invoke_agent.py` and the chat UI send
+   `X-Amzn-Bedrock-AgentCore-Runtime-Session-Id`. The CLI keeps one id per user in
+   `.deploy/session-<user>.txt`. The Runtime routes every request with that id to the same microVM.
+2. **One agent per process.** The microVM runs one `app.py` process, which holds one `AgentRuntime`
+   (`get_runtime()`), which holds one Strands `Agent` (`self._agent`).
+3. **Built once, then reused.** The first message builds the agent (load skills, connect to the
+   Gateway, list tools). After that `_agent_for()` returns the same object while the caller's token
+   `sub` stays the same.
+4. **Strands keeps the history.** `agent(prompt)` appends the user message to `agent.messages`, runs
+   the model/tool loop, and appends the replies and tool results. The whole list goes to Bedrock on the
+   next turn, so "and the other order?" makes sense.
+5. **Skill state carries over.** Activated skills are recorded in `agent.state["agent_skills"]`, so a
+   follow-up can use the returns skill without activating it again.
+
+| Limit | Effect |
+|---|---|
+| Not persisted | When the microVM ends, the conversation is gone. Sessions end after the Runtime's idle timeout or maximum lifetime. This repo doesn't set them, so the AWS defaults apply (check the current AgentCore docs for the values). A redeploy also starts fresh microVMs |
+| History capped at 40 messages | Strands' default `SlidingWindowConversationManager` keeps the last 40 messages. Tool calls and results count, so a return flow fills the window quickly |
+| Changing user resets it | A different token `sub` in the same process makes `_agent_for()` discard the agent and build a new one. Normally each user has their own session id, so this doesn't come up |
+| One conversation per process | Requests take turns behind `self._lock`. Fine when each session has its own microVM. Locally (`run_local.py`, or `app.py` with `GATEWAY_AUTH_MODE=none`) there's one conversation per process whatever session id you send |
+| Cost grows per turn | The full history is re-sent on every model call ([07-cost.md](07-cost.md)) |
+| Starting fresh | `--new-session`, `/new` or the chat UI's *New session*: a new id means a new microVM and an empty history |
+
+**Memory across sessions** needs storage outside the microVM: AgentCore Memory (managed short- and
+long-term memory), or a Strands session manager that saves `messages` and `state` to S3 or DynamoDB
+keyed by session id. Either also survives idle timeouts and redeploys. Neither is part of this PoC.
 
 ## Per-user access control
 
@@ -360,3 +442,4 @@ What to change before production:
 | Data | Fake labels, no PII protection | Encryption with CMKs, PITR, retention rules, PII redaction in logs |
 | Observability | Logs only | OTEL traces, dashboards, alarms on errors and policy denials |
 | Least privilege | `dynamodb:Scan` is granted though unused | Trim actions to what the code calls |
+| Conversation memory | In-process only, per microVM; lost on idle timeout or redeploy; 40-message window | AgentCore Memory or a Strands session manager (S3/DynamoDB); set explicit Runtime lifecycle timeouts |

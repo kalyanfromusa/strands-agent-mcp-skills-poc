@@ -13,8 +13,9 @@ Where it fits
     machine token (OAuth) and forwards the call over HTTPS to this server. Tickets are saved through
     `common/store.py` (the DynamoDB tickets table when deployed).
 
-    How the Runtime hosts it: `scripts/build.py` zips this file, `faq.json`, the `common/` folder and
-    the Python libraries. The Runtime unpacks the zip, runs `server.py`, and expects an MCP endpoint on
+    How the Runtime hosts it: `mcp_servers/support_mcp/Dockerfile` packs this file, `faq.json`, the
+    `common/` folder and the Python libraries into a container image. The Runtime starts the image, which
+    runs `server.py`, and expects an MCP endpoint on
     port 8000 at the path /mcp. "Stateless" means each request stands alone: the server keeps no
     conversation state between requests, which is what the Runtime's MCP contract asks for.
 

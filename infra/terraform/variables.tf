@@ -30,15 +30,39 @@ variable "region" {
 # The short name used at the start of every resource name (e.g. shopassist-orders) and as the
 # project tag. Change it if you want two copies side by side in one account.
 variable "name_prefix" {
-  description = "Prefix for resource names and the project tag. Must stay lowercase letters (used in S3, Cognito domain and AgentCore runtime names)."
+  description = "Project prefix and project tag. Names are <prefix>-<environment>-*. Lowercase letters/digits only (used in S3, Cognito domain and AgentCore runtime names)."
   type        = string
   default     = "shopassist"
 
   validation {
     # AgentCore runtime names allow [a-zA-Z0-9_], Cognito domains and S3 allow [a-z0-9-]:
     # lowercase letters/digits are the only safe intersection.
-    condition     = can(regex("^[a-z][a-z0-9]{1,20}$", var.name_prefix))
-    error_message = "name_prefix must be 2-21 lowercase letters/digits, starting with a letter."
+    condition     = can(regex("^[a-z][a-z0-9]{1,15}$", var.name_prefix))
+    error_message = "name_prefix must be 2-16 lowercase letters/digits, starting with a letter (room for -<environment>)."
+  }
+}
+
+# Which environment this copy of the stack is (dev or prod). It becomes part of every resource name
+# and selects the state file (envs/<env>.backend.hcl) and the settings (envs/<env>.tfvars).
+variable "environment" {
+  description = "Environment: dev or prod. Part of every resource name (shopassist-<env>-*)."
+  type        = string
+
+  validation {
+    condition     = contains(["dev", "prod"], var.environment)
+    error_message = "environment must be \"dev\" or \"prod\"."
+  }
+}
+
+# The git commit SHA whose container images to run. The pipeline passes it (-var image_tag=<sha>);
+# changing it is how a new version is rolled out, or an old one rolled back.
+variable "image_tag" {
+  description = "Full 40-character git commit SHA of the images in ECR (all four images share it)."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.image_tag))
+    error_message = "image_tag must be a full 40-character lowercase hex git SHA."
   }
 }
 
@@ -46,7 +70,7 @@ variable "name_prefix" {
 variable "model_id" {
   description = "Bedrock model id or inference profile id used by the agent."
   type        = string
-  default     = "us.anthropic.claude-haiku-5-5"
+  default     = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 }
 
 # Turn on the optional monthly cost alert in main.tf. Off by default so nothing emails you unasked.

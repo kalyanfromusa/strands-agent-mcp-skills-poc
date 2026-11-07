@@ -1,0 +1,102 @@
+# =====================================================================================================
+# .github/workflows/ci.yml: checks + a read-only Terraform plan on every pull request
+#
+# What this file does
+#   For each pull request to main:
+#     1. checks: tests, IaC lint, and every image built, started, checked and scanned (_checks.yml).
+#     2. plan:   a read-only `terraform plan` of prod with the PR's commit as image_tag, posted as a PR
+#                comment that lists only resource addresses and actions (scripts/tf_plan_summary.py).
+#   Nothing is pushed or applied.
+#
+# Where it fits
+#   The reviewer (you) sees what a merge would change before merging. Deploying stays a separate,
+#   manual, approved step (deploy.yml).
+#
+# Security
+#   - The plan job runs only for PRs from this repository. Fork PRs get no OIDC token from GitHub, so
+#     the job is skipped for them (the checks still run, with no AWS access).
+#   - The plan role (shopassist-gha-plan) is read-only; it is trusted only for this repo's pull
+#     requests and main (infra/terraform/platform/iam_ci.tf).
+#   - Logs are public: the full plan output goes to a file that is never printed or uploaded.
+#   - There is no pull_request_target trigger anywhere (that would hand secrets to fork code).
+#
+# Repository variables used: AWS_REGION, AWS_PLAN_ROLE (see infra/terraform/platform outputs).
+# =====================================================================================================
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    uses: ./.github/workflows/_checks.yml
+
+  plan:
+    needs: checks
+    # Same-repo PRs only (forks can't get AWS credentials), and only once the plan role is configured.
+    if: github.event.pull_request.head.repo.full_name == github.repository && vars.AWS_PLAN_ROLE != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write      # ask GitHub for the OIDC token that AWS exchanges for plan-role credentials
+      pull-requests: write # post the summary comment
+    env:
+      TF_IN_AUTOMATION: "1"
+      TF_INPUT: "0"
+      TARGET_ENV: prod
+      IMAGE_TAG: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+      - name: AWS credentials (plan role, OIDC)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE }}
+          role-session-name: gha-pr-plan-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: terraform plan (prod, read-only, output kept private)
+        working-directory: infra/terraform
+        run: |
+          terraform init -backend-config="envs/${TARGET_ENV}.backend.hcl" -no-color > init.log 2>&1 \
+            || { grep -E "^(Error|│)" init.log | head -40; exit 1; }
+          # -lock=false: a PR plan never writes, so it shouldn't block a real deploy holding the lock.
+          terraform plan -lock=false -no-color -var-file="envs/${TARGET_ENV}.tfvars" -var "image_tag=${IMAGE_TAG}" \
+            -out=tfplan > plan.log 2>&1 || { grep -E "^(Error|│)" plan.log | head -40; exit 1; }
+          terraform show -json tfplan | uv run --no-project python ../../scripts/tf_plan_summary.py \
+            --title "Terraform plan: ${TARGET_ENV} (if this PR were deployed)" > summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          rm -f tfplan plan.log init.log
+
+      - name: Post or update the PR comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- shopassist-plan -->';
+            const body = marker + '\n' + fs.readFileSync('infra/terraform/summary.md', 'utf8');
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const mine = comments.find(c => c.user.type === 'Bot' && c.body.startsWith(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

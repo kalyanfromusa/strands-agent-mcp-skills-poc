@@ -1,27 +1,27 @@
 # =====================================================================================================
-# modules/data/main.tf: storage for ShopAssist (code files in S3, business data in DynamoDB)
+# modules/data/main.tf: storage for ShopAssist (skills files in S3, business data in DynamoDB)
 #
 # What this file does
-#   Creates the private S3 bucket that holds the code zips and the skills files, uploads them, creates
-#   the three DynamoDB tables (orders, returns, tickets), and optionally loads the demo orders.
+#   Creates the private S3 bucket that holds the skills files, uploads them, creates the three DynamoDB
+#   tables (orders, returns, tickets), and optionally loads the demo orders. (The code no longer lives
+#   here: it ships as container images in ECR.)
 #
 # Where it fits
-#   Called first by the root main.tf (module "data"). Its outputs feed the other modules: the zip
-#   locations go to lambda_tools, mcp_runtime and agent_runtime; the table names go to lambda_tools
-#   (orders, returns) and mcp_runtime (tickets); the skills location goes to agent_runtime.
+#   Called first by the root main.tf (module "data"). Its outputs feed the other modules: the table
+#   names go to lambda_tools (orders, returns) and mcp_runtime (tickets); the skills location goes to
+#   agent_runtime.
 #
 # Step by step
-#   1. Create the S3 bucket <prefix>-artifacts-<account>-<region>.
-#   2. Turn on versioning, so every upload gets its own version id.
+#   1. Create the S3 bucket <prefix>-artifacts-<account>-<region> (prefix includes the environment).
+#   2. No versioning (decision 2026-11-07): an upload replaces the file.
 #   3. Block all public access to the bucket.
-#   4. Upload dist/agent.zip, dist/support_mcp.zip and dist/orders_lambda.zip under artifacts/.
+#   4. (Removed: code zips. The code is in container images now.)
 #   5. Upload every file of the skills/ folder under skills/.
 #   6. Create the DynamoDB tables <prefix>-orders, <prefix>-returns and <prefix>-tickets.
 #   7. If seed_data = true, run scripts/seed_data.py on your computer to fill the orders table.
 #
 # Key terms
 #   S3 (Simple Storage Service): AWS file storage. A "bucket" is a top-level folder; a "key" is a path.
-#   Versioning: S3 keeps every uploaded copy of a file, each with its own version id.
 #   DynamoDB: an AWS database of tables of items (rows), each found by its key (e.g. order_id).
 #   GSI (Global Secondary Index): a second way to look up a DynamoDB table, here by customer_id.
 #   etag: a fingerprint of a file's content; when it changes, Terraform uploads the file again.
@@ -35,21 +35,10 @@ locals {
 
 # ---------------------------------------------------------------- S3 artifacts
 
-# Step 1: the bucket that holds the code zips and the skills files. The runtimes and the Lambda
-# read their code from here.
+# Step 1: the bucket that holds the skills files. The agent reads them at cold start.
 resource "aws_s3_bucket" "artifacts" {
   bucket        = local.bucket_name
-  force_destroy = true # PoC: `terraform destroy` must not stop at a non-empty, versioned bucket
-}
-
-# Step 2: keep every version of every file.
-# Versioning gives every upload a version_id. The runtimes and the Lambda pin that
-# version, so a rebuilt zip (new etag => new version) shows up as an in-place update.
-resource "aws_s3_bucket_versioning" "artifacts" {
-  bucket = aws_s3_bucket.artifacts.id
-  versioning_configuration {
-    status = "Enabled"
-  }
+  force_destroy = true # cost hygiene: `terraform destroy` must not stop at a non-empty bucket
 }
 
 # Step 3: make sure nothing in the bucket can ever be made public. Only AWS roles we grant can read it.
@@ -61,35 +50,10 @@ resource "aws_s3_bucket_public_access_block" "artifacts" {
   restrict_public_buckets = true
 }
 
-# Step 4: upload the three code zips built by scripts/build.py, one S3 object per zip
-# (for_each repeats this block for agent, support_mcp and orders_lambda).
-# Each lands at artifacts/<zip name>, e.g. artifacts/agent.zip.
-resource "aws_s3_object" "artifact" {
-  for_each = var.artifact_files
-
-  bucket = aws_s3_bucket.artifacts.id
-  key    = "artifacts/${basename(each.value)}"
-  source = each.value
-  # Guarded so a missing zip reaches the precondition below (clear message)
-  # instead of failing inside filemd5().
-  etag = fileexists(each.value) ? filemd5(each.value) : null
-
-  # Stop before uploading anything if a zip is missing, and tell the user how to build it.
-  lifecycle {
-    precondition {
-      condition     = fileexists(each.value)
-      error_message = "Missing ${each.value}. Terraform does not build artifacts: run `uv run python scripts/build.py` from the repo root first."
-    }
-  }
-
-  # version_id is only populated once versioning is on.
-  depends_on = [aws_s3_bucket_versioning.artifacts]
-}
-
 # Step 5: mirror every file in skills/ (the SKILL.md procedures) to s3://<bucket>/skills/.
 # The content type tells readers whether a file is Markdown, JSON or plain text.
 # Skills are plain files read by the agent at cold start (SKILLS_S3_URI), so a skill
-# edit only needs `terraform apply` + a new session, not a new agent zip.
+# edit only needs `terraform apply` + a new session, not a new agent image.
 resource "aws_s3_object" "skill" {
   for_each = fileset(var.skills_dir, "**")
 
@@ -102,7 +66,6 @@ resource "aws_s3_object" "skill" {
     endswith(each.value, ".json") ? "application/json" : "text/plain"
   )
 
-  depends_on = [aws_s3_bucket_versioning.artifacts]
 }
 
 # ---------------------------------------------------------------- DynamoDB

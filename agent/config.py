@@ -43,7 +43,7 @@ from pathlib import Path
 AUTH_MODES = ("passthrough", "client_credentials", "none")
 
 # Defaults used when the matching environment variable is not set.
-DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-5-5"  # Claude Haiku on Amazon Bedrock
+DEFAULT_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"  # Claude Haiku on Amazon Bedrock
 DEFAULT_REGION = "us-east-1"  # AWS region (data centre location) the agent talks to
 DEFAULT_GATEWAY_URL = "http://localhost:8000/mcp"  # a local MCP server, for development only
 

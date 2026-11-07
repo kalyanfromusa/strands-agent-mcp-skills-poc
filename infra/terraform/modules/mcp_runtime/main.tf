@@ -6,17 +6,17 @@
 #   and search_faq) on AgentCore Runtime, with its own permissions and log group.
 #
 # Where it fits
-#   Called by the root main.tf (module "mcp_runtime") with the zip and tickets table from module "data"
+#   Called by the root main.tf (module "mcp_runtime") with its image URI, the tickets table from module "data"
 #   and the Cognito details from module "identity". The Gateway's `support` target calls this server
 #   (with a machine token) when the agent uses a support tool; the server reads and writes the
 #   tickets table in DynamoDB.
 #
 # Step by step
 #   1. Create an IAM role that only AgentCore, acting for this account, may use.
-#   2. Allow it to read its code zip, use the tickets table, write logs/traces/metrics and get its
+#   2. Allow it to pull its image, use the tickets table, write logs/traces/metrics and get its
 #      workload identity token.
 #   3. Wait 15 seconds so AWS has spread the new permissions everywhere.
-#   4. Create the runtime <prefix>_support_mcp from artifacts/support_mcp.zip, speaking MCP, and only
+#   4. Create the runtime <prefix>_<env>_support_mcp from its container image, speaking MCP, and only
 #      accepting tokens from the M2M client.
 #   5. Create its log group with a short retention.
 #
@@ -34,7 +34,8 @@
 # runtime_name: the runtime's name, e.g. shopassist_support_mcp (underscores only, no dashes allowed).
 # runtime_logs: the pattern that matches every AgentCore runtime log group in this account and region.
 locals {
-  runtime_name = "${var.name_prefix}_support_mcp" # runtime names: [a-zA-Z][a-zA-Z0-9_]{0,47}
+  # Runtime names allow [a-zA-Z][a-zA-Z0-9_]{0,47}: shopassist-prod => shopassist_prod_support_mcp.
+  runtime_name = "${replace(var.name_prefix, "-", "_")}_support_mcp"
   runtime_logs = "arn:aws:logs:${var.region}:${var.account_id}:log-group:/aws/bedrock-agentcore/runtimes/*"
 }
 
@@ -68,18 +69,27 @@ data "aws_iam_policy_document" "assume" {
 resource "aws_iam_role" "this" {
   name               = "${var.name_prefix}-support-mcp-runtime-role"
   assume_role_policy = data.aws_iam_policy_document.assume.json
+
+  # The ceiling set by the platform stack: the role can never do more than this boundary allows.
+  permissions_boundary = var.permissions_boundary_arn
 }
 
 # Step 2a: what the support server may do:
-#   ReadCodeZip:      download its own zip (and only that file) from the artifacts bucket.
+#   EcrAuth/EcrPullImage: pull its own container image (and only that repository) from ECR.
 #   Tickets:          read, create, update and delete items in the tickets table only.
 #   Logs/XRay/Metrics: write its logs, request traces and metrics so you can see what it did.
 #   WorkloadIdentity: fetch the token for its own workload identity.
 data "aws_iam_policy_document" "permissions" {
+  # Pull its own container image from ECR (GetAuthorizationToken only works on "*").
   statement {
-    sid       = "ReadCodeZip"
-    actions   = ["s3:GetObject", "s3:GetObjectVersion"]
-    resources = ["arn:aws:s3:::${var.bucket}/${var.zip_key}"]
+    sid       = "EcrAuth"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "EcrPullImage"
+    actions   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"]
+    resources = [var.ecr_repository_arn]
   }
 
   statement {
@@ -163,9 +173,8 @@ resource "time_sleep" "iam" {
 # ---------------------------------------------------------------- Runtime
 
 # Step 4: the support server itself.
-#   agent_runtime_artifact / code_configuration: "direct code deploy". AgentCore downloads the zip
-#     from S3 and runs server.py with Python 3.12, so no Docker image is needed. Pinning version_id
-#     means a rebuilt zip (new S3 version) is picked up by the next `terraform apply`.
+#   agent_runtime_artifact / container_configuration: AgentCore pulls <ECR repo>:<git sha> and runs it
+#     (CMD python server.py, MCP on port 8000). A new image_tag is an in-place runtime update.
 #   protocol_configuration MCP: AgentCore forwards MCP requests to the server inside the microVM.
 #   network_configuration PUBLIC: the runtime has internet access and no private network (VPC) setup.
 #   authorizer_configuration: only tokens issued by our Cognito pool to the M2M client are accepted,
@@ -178,17 +187,8 @@ resource "aws_bedrockagentcore_agent_runtime" "this" {
   role_arn           = aws_iam_role.this.arn
 
   agent_runtime_artifact {
-    code_configuration {
-      entry_point = ["server.py"]
-      runtime     = "PYTHON_3_12"
-      code {
-        s3 {
-          bucket = var.bucket
-          prefix = var.zip_key # the object key of the zip, despite the name
-          # A new version id (new zip) is a diff => in-place runtime update.
-          version_id = var.zip_version_id
-        }
-      }
+    container_configuration {
+      container_uri = var.image_uri
     }
   }
 

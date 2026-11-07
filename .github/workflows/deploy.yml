@@ -1,99 +1,116 @@
 # =====================================================================================================
-# .github/workflows/deploy.yml: test -> build arm64 images -> push to ECR -> roll out to AgentCore Runtime
+# .github/workflows/deploy.yml: the ONLY way ShopAssist is deployed (manual, approved, Terraform)
 #
 # What this file does
-#   On every push to main that touches the agent, the support MCP server, the shared code or the
-#   skills (and on manual runs), it runs the offline tests, builds both container images for
-#   linux/arm64, pushes them to ECR tagged with the commit SHA and `latest`, syncs skills/ to S3,
-#   swaps the image of both AgentCore runtimes (every other runtime setting unchanged), waits for
-#   READY, re-synchronizes the Gateway's `support` target, and optionally runs the access demo.
+#   Run by hand (Actions → deploy → Run workflow) with:
+#     target_env  prod (default) or dev (blocked unless the repository variable DEPLOY_DEV = true)
+#     image_tag   the full git SHA to deploy. Empty = the commit you run it on (the head of main).
+#                 An older SHA that is still in ECR = a rollback (ECR keeps current + previous).
+#   Jobs:
+#     1. prepare  checks the inputs, that the SHA is on main, and runs the unit tests.
+#     2. plan     read-only `terraform plan` with the plan role. Its summary (addresses + actions,
+#                 no values) is what you review on the approval screen.
+#     3. deploy   waits in the GitHub environment <target_env> (prod: you must approve). Then, with the
+#                 apply role: builds + checks + scans + pushes any image of that SHA not yet in ECR,
+#                 re-plans and refuses to continue if the plan differs from the one you approved,
+#                 applies it, and runs the access smoke test (scenarios b, c, d) against the result.
+#                 If it fails before Terraform started changing anything, it deletes the images it
+#                 pushed, so ECR still holds exactly "current + previous".
 #
 # Where it fits
-#   docs/10-ci-cd.md. Terraform (infra/terraform, artifact_type = "container") and infra/terraform/ci
-#   create the infrastructure ONCE; this workflow never runs Terraform. It only needs the CI role
-#   (OIDC, no stored AWS keys) and the repository variables listed below.
+#   Pull requests (ci.yml) and merges (build.yml) only check and build. Nothing deploys automatically.
+#   Terraform (infra/terraform, state in S3) does every change, image rollouts included.
 #
-# Step by step
-#   1. test            uv sync + pytest (offline: moto, no AWS).
-#   2. build-and-push  one matrix leg per image on a native arm64 runner: OIDC login, ECR login,
-#                      buildx build --platform linux/arm64, push <sha> + latest, GitHub Actions cache.
-#   3. deploy          aws s3 sync skills/, update-runtime for the agent and the support MCP server
-#                      (scripts/ci/update_runtime_image.py), then sync-target support.
-#   4. smoke           (optional) scripts/demo_access.py with .deploy/ files rebuilt from secrets.
-#   Manual run with image_tag = <older full SHA> skips the build and redeploys that image (rollback).
+# Security
+#   - AWS access only through GitHub OIDC: the plan role (main) and the apply role, which AWS lets
+#     only a job in the GitHub environment <target_env> assume. No AWS keys are stored in GitHub.
+#   - The prod environment allows only the main branch and needs your approval (GitHub settings).
+#   - Public logs: Terraform's own output goes to files that are never printed or uploaded. The demo
+#     users' passwords that Terraform writes for the smoke test are deleted at the end of the job.
+#   - Inputs reach the shell only through environment variables, after validation.
 #
-# Repository VARIABLES (Settings > Secrets and variables > Actions > Variables; none of these are secret)
-#   AWS_ROLE_ARN            CI role from infra/terraform/ci (output ci_role_arn). Unset = AWS jobs skip.
-#   AWS_REGION              default us-east-1
-#   AGENT_RUNTIME_ID        e.g. shopassist_agent-AbC123xyz9 (from agent_runtime_arn in .deploy/outputs.json)
-#   SUPPORT_MCP_RUNTIME_ID  e.g. shopassist_support_mcp-XyZ987abc6
-#   GATEWAY_ID              e.g. shopassist-gateway-abc123def4
-#   ARTIFACTS_BUCKET        e.g. shopassist-artifacts-<account>-us-east-1
-#   ECR_AGENT_REPOSITORY / ECR_SUPPORT_MCP_REPOSITORY   default shopassist-agent / shopassist-support-mcp
-#   SUPPORT_TARGET_NAME     default support
-#   BUILD_RUNNER            default ubuntu-24.04-arm; set ubuntu-24.04 (+ USE_QEMU=true) if arm64
-#                           runners are not available to this (private) repository
-#   USE_QEMU                "true" = emulate arm64 with QEMU on an x64 runner (slow)
-#   RUN_SMOKE               "true" = run the smoke job after every deploy
-#   SMOKE_SCENARIOS         default b,c,d (a creates a real return and needs a re-seed)
-# Repository SECRETS (smoke job only)
-#   DEPLOY_OUTPUTS_JSON     content of .deploy/outputs.json
-#   DEPLOY_USERS_JSON       content of .deploy/users.json (demo passwords: this one IS secret)
-#
-# Key terms
-#   OIDC: GitHub issues a signed token per job (permission id-token: write); AWS STS trades it for
-#     one-hour credentials of the CI role. Its trust policy only accepts this repo on refs/heads/main,
-#     so the jobs below must not use a GitHub `environment:` (that changes the token's subject).
-#   buildx: Docker's builder; `type=gha` stores layer cache in the GitHub Actions cache.
-#   Matrix: one job definition run once per entry (here: once per image), in parallel.
+# Repository variables: AWS_REGION, AWS_PLAN_ROLE, DEPLOY_DEV. Environment variable: AWS_APPLY_ROLE.
 # =====================================================================================================
-
 name: deploy
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "agent/**"
-      - "mcp_servers/support_mcp/**"
-      - "mcp_servers/common/**"
-      - "skills/**"
-      - "scripts/ci/**"
-      - ".github/workflows/deploy.yml"
-      - "pyproject.toml"
-      - "uv.lock"
   workflow_dispatch:
     inputs:
+      target_env:
+        description: Environment to deploy
+        type: choice
+        options: [prod, dev]
+        default: prod
       image_tag:
-        description: "Rollback: full commit SHA of an image already in ECR (empty = build this commit)"
+        description: Full 40-character git SHA to deploy (empty = this commit). An older SHA = rollback.
         type: string
         default: ""
-      run_smoke:
-        description: "Run scripts/demo_access.py after the deploy (needs DEPLOY_*_JSON secrets)"
-        type: boolean
-        default: false
 
-# Least privilege for the GITHUB_TOKEN; id-token lets jobs request the OIDC token for AWS.
 permissions:
-  id-token: write
   contents: read
 
-# One rollout at a time; never cancel one half-way (a runtime could be left mid-update).
+# One deploy per environment at a time; never cancel one half-way.
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: deploy-${{ inputs.target_env }}
   cancel-in-progress: false
 
 env:
-  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-  IMAGE_TAG: ${{ inputs.image_tag || github.sha }}
-  ECR_AGENT_REPOSITORY: ${{ vars.ECR_AGENT_REPOSITORY || 'shopassist-agent' }}
-  ECR_SUPPORT_MCP_REPOSITORY: ${{ vars.ECR_SUPPORT_MCP_REPOSITORY || 'shopassist-support-mcp' }}
+  TF_IN_AUTOMATION: "1"
+  TF_INPUT: "0"
+  TARGET_ENV: ${{ inputs.target_env }}
 
 jobs:
-  # ------------------------------------------------------------------ 1. offline tests
-  test:
+  # ------------------------------------------------------------------ 1. inputs + unit tests
+  prepare:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    outputs:
+      sha: ${{ steps.inputs.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # needed to check that image_tag is a commit on main
+
+      - name: Check inputs
+        id: inputs
+        env:
+          INPUT_TAG: ${{ inputs.image_tag }}
+          RUN_SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+          DEPLOY_DEV: ${{ vars.DEPLOY_DEV }}
+        run: |
+          [ "$REF" = "refs/heads/main" ] || { echo "::error::deploy only runs from main (got $REF)"; exit 1; }
+          case "$TARGET_ENV" in
+            prod) ;;
+            dev) [ "$DEPLOY_DEV" = "true" ] || { echo "::error::dev deploys are switched off (DEPLOY_DEV != true)"; exit 1; } ;;
+            *) echo "::error::unknown target_env"; exit 1 ;;
+          esac
+          sha="${INPUT_TAG:-$RUN_SHA}"
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::image_tag must be a full 40-character lowercase git SHA"; exit 1; }
+          git merge-base --is-ancestor "$sha" origin/main || { echo "::error::$sha is not a commit on main"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Deploying \`$sha\` to **$TARGET_ENV**" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run pytest -q
+
+  # ------------------------------------------------------------------ 2. what will change (read-only)
+  plan:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      hash: ${{ steps.plan.outputs.hash }}
+    env:
+      IMAGE_TAG: ${{ needs.prepare.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -101,224 +118,155 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.12"
-          enable-cache: true
-      # --frozen: install exactly uv.lock without re-resolving (the lock was written by an older uv).
-      - run: uv sync --frozen
-      - run: uv run pytest -q
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+      - name: AWS credentials (plan role, OIDC)
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE }}
+          role-session-name: gha-deploy-plan-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: terraform plan (output kept private; summary only)
+        id: plan
+        working-directory: infra/terraform
+        run: |
+          terraform init -backend-config="envs/${TARGET_ENV}.backend.hcl" -no-color > init.log 2>&1 \
+            || { grep -E "^(Error|│)" init.log | head -40; exit 1; }
+          terraform plan -lock=false -no-color -var-file="envs/${TARGET_ENV}.tfvars" -var "image_tag=${IMAGE_TAG}" \
+            -out=tfplan > plan.log 2>&1 || { grep -E "^(Error|│)" plan.log | head -40; exit 1; }
+          terraform show -json tfplan > plan.json
+          uv run --no-project python ../../scripts/tf_plan_summary.py --title "Plan for ${TARGET_ENV} @ ${IMAGE_TAG:0:12} (approve below)" \
+            < plan.json >> "$GITHUB_STEP_SUMMARY"
+          echo "hash=$(uv run --no-project python ../../scripts/tf_plan_summary.py --hash < plan.json)" >> "$GITHUB_OUTPUT"
+          rm -f tfplan plan.json plan.log init.log
 
-  # ------------------------------------------------------------------ 2. build + push (one leg per image)
-  build-and-push:
-    needs: test
-    if: vars.AWS_ROLE_ARN != '' && (github.event_name == 'push' || inputs.image_tag == '')
-    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-24.04-arm' }}
-    timeout-minutes: 45
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - name: agent
-            dockerfile: agent/Dockerfile
-          - name: support-mcp
-            dockerfile: mcp_servers/support_mcp/Dockerfile
+  # ------------------------------------------------------------------ 3. approved: push, apply, smoke
+  deploy:
+    needs: [prepare, plan]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    environment: ${{ inputs.target_env }} # prod: waits for your approval; dev: no reviewer
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IMAGE_TAG: ${{ needs.prepare.outputs.sha }}
+      APPROVED_HASH: ${{ needs.plan.outputs.hash }}
     steps:
+      # Terraform code and scripts from the commit this run is on (main) ...
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: AWS credentials (OIDC)
+      # ... and the source of the images from image_tag (the same commit unless this is a rollback).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.prepare.outputs.sha }}
+          path: src
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen # Terraform's local-exec steps (seed, log groups, gateway sync) use it
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_wrapper: false
+      - name: AWS credentials (apply role for ${{ inputs.target_env }}, OIDC)
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          role-session-name: gha-build-${{ matrix.name }}-${{ github.run_id }}
-          aws-region: ${{ env.AWS_REGION }}
-
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE }}
+          role-session-name: gha-deploy-${{ inputs.target_env }}-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
       - name: ECR login
         id: ecr
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
 
-      # QEMU fallback: only when building arm64 on an x64 runner (vars.BUILD_RUNNER = ubuntu-24.04).
-      # Expect roughly 5-15 minutes per image instead of 1-3 natively.
-      - name: QEMU (arm64 emulation fallback)
-        if: vars.USE_QEMU == 'true'
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-        with:
-          platforms: arm64
+      # Which images of this SHA are not in ECR yet?
+      - name: Find missing images
+        id: missing
+        run: |
+          for kind in agent support_mcp orders_lambda; do
+            repo="shopassist-${kind//_/-}"
+            if aws ecr describe-images --repository-name "$repo" --image-ids "imageTag=${IMAGE_TAG}" >/dev/null 2>&1; then
+              echo "$kind=false" >> "$GITHUB_OUTPUT"; echo "$repo:${IMAGE_TAG:0:12} already in ECR"
+            else
+              echo "$kind=true" >> "$GITHUB_OUTPUT"; echo "$repo:${IMAGE_TAG:0:12} will be built"
+            fi
+          done
 
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build agent
+        if: steps.missing.outputs.agent == 'true'
+        uses: ./.github/actions/build-image
+        with: { kind: agent, dockerfile: agent/Dockerfile, tag: "${{ env.IMAGE_TAG }}", source: src }
+      - name: Build support_mcp
+        if: steps.missing.outputs.support_mcp == 'true'
+        uses: ./.github/actions/build-image
+        with: { kind: support_mcp, dockerfile: mcp_servers/support_mcp/Dockerfile, tag: "${{ env.IMAGE_TAG }}", source: src }
+      - name: Build orders_lambda
+        if: steps.missing.outputs.orders_lambda == 'true'
+        uses: ./.github/actions/build-image
+        with: { kind: orders_lambda, dockerfile: mcp_servers/orders_lambda/Dockerfile, tag: "${{ env.IMAGE_TAG }}", source: src }
 
-      - name: Image name
-        id: meta
+      - name: Push the new images
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
-          LEG: ${{ matrix.name }}
+          NEED_AGENT: ${{ steps.missing.outputs.agent }}
+          NEED_SUPPORT: ${{ steps.missing.outputs.support_mcp }}
+          NEED_ORDERS: ${{ steps.missing.outputs.orders_lambda }}
         run: |
-          repo="$ECR_SUPPORT_MCP_REPOSITORY"; [ "$LEG" = agent ] && repo="$ECR_AGENT_REPOSITORY"
-          echo "repository=${REGISTRY}/${repo}" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push ${{ matrix.name }} (linux/arm64)
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .                      # repo root: the support image needs mcp_servers/common
-          file: ${{ matrix.dockerfile }}  # <Dockerfile>.dockerignore next to it trims the context
-          platforms: linux/arm64
-          push: true
-          tags: |
-            ${{ steps.meta.outputs.repository }}:${{ github.sha }}
-            ${{ steps.meta.outputs.repository }}:latest
-          # A plain single-platform image manifest (no attestation index) for AgentCore Runtime.
-          provenance: false
-          sbom: false
-          labels: |
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
-
-  # ------------------------------------------------------------------ 3. roll out (no Terraform)
-  deploy:
-    needs: [test, build-and-push]
-    if: >-
-      !cancelled() && vars.AWS_ROLE_ARN != '' && needs.test.result == 'success' &&
-      (needs.build-and-push.result == 'success' ||
-       (needs.build-and-push.result == 'skipped' && inputs.image_tag != ''))
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      AGENT_RUNTIME_ID: ${{ vars.AGENT_RUNTIME_ID }}
-      SUPPORT_MCP_RUNTIME_ID: ${{ vars.SUPPORT_MCP_RUNTIME_ID }}
-      GATEWAY_ID: ${{ vars.GATEWAY_ID }}
-      ARTIFACTS_BUCKET: ${{ vars.ARTIFACTS_BUCKET }}
-      SUPPORT_TARGET_NAME: ${{ vars.SUPPORT_TARGET_NAME || 'support' }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # Rollback: take skills/ from the same commit as the image, scripts from the current one.
-      - name: Check out skills of the rollback commit
-        if: inputs.image_tag != ''
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.image_tag }}
-          path: rollback
-          sparse-checkout: skills
-          persist-credentials: false
-
-      - name: Check inputs and repository variables
-        run: |
-          if ! [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::image_tag must be a full 40-character commit SHA"; exit 1
-          fi
-          missing=""
-          for v in AGENT_RUNTIME_ID SUPPORT_MCP_RUNTIME_ID GATEWAY_ID ARTIFACTS_BUCKET; do
-            [ -n "${!v}" ] || missing="$missing $v"
+          pushed=""
+          for pair in "agent:$NEED_AGENT" "support_mcp:$NEED_SUPPORT" "orders_lambda:$NEED_ORDERS"; do
+            kind="${pair%%:*}"; need="${pair##*:}"
+            [ "$need" = "true" ] || continue
+            repo="shopassist-${kind//_/-}"
+            docker tag "local/${kind}:${IMAGE_TAG}" "${REGISTRY}/${repo}:${IMAGE_TAG}"
+            docker push --quiet "${REGISTRY}/${repo}:${IMAGE_TAG}"
+            pushed="$pushed $repo"
+            # Remember it immediately, so a failure in a later push still cleans this one up.
+            echo "PUSHED_REPOS=${pushed# }" >> "$GITHUB_ENV"
           done
-          if [ -n "$missing" ]; then
-            echo "::error::Set these repository variables first (docs/10-ci-cd.md):$missing"; exit 1
+          echo "pushed: ${pushed:-nothing (all images already in ECR)}"
+
+      - name: Re-plan and compare with the approved plan
+        working-directory: infra/terraform
+        run: |
+          terraform init -backend-config="envs/${TARGET_ENV}.backend.hcl" -no-color > init.log 2>&1 \
+            || { grep -E "^(Error|│)" init.log | head -40; exit 1; }
+          terraform plan -no-color -var-file="envs/${TARGET_ENV}.tfvars" -var "image_tag=${IMAGE_TAG}" \
+            -out=tfplan > plan.log 2>&1 || { grep -E "^(Error|│)" plan.log | head -40; exit 1; }
+          now="$(terraform show -json tfplan | uv run --no-project python ../../scripts/tf_plan_summary.py --hash)"
+          if [ "$now" != "$APPROVED_HASH" ]; then
+            echo "::error::The plan changed after approval (something else changed the environment). Nothing applied; run the deploy again."
+            exit 1
+          fi
+          echo "plan matches the approved one (${now:0:16})"
+
+      - name: terraform apply (output kept private)
+        working-directory: infra/terraform
+        run: |
+          echo "APPLY_STARTED=1" >> "$GITHUB_ENV"
+          if terraform apply -no-color tfplan > apply.log 2>&1; then
+            grep -E "^Apply complete" apply.log | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            grep -E "^(Error|│)" apply.log | head -60
+            exit 1
           fi
 
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          python-version: "3.12"
-          enable-cache: true
-      - run: uv sync --frozen --no-dev
-
-      - name: AWS credentials (OIDC)
-        id: aws
-        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          role-session-name: gha-deploy-${{ github.run_id }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Image URIs
-        id: img
+      - name: Smoke test (access scenarios b, c, d)
         env:
-          ACCOUNT_ID: ${{ steps.aws.outputs.aws-account-id }}
+          SHOPASSIST_ENV: ${{ inputs.target_env }}
+        run: uv run python scripts/demo_access.py --no-reseed --only b,c,d
+
+      # Failed before Terraform changed anything: remove what this run pushed (ECR keeps current + previous).
+      - name: Clean up pushed images after an early failure
+        if: failure() && env.APPLY_STARTED != '1' && env.PUSHED_REPOS != ''
         run: |
-          registry="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-          echo "agent=${registry}/${ECR_AGENT_REPOSITORY}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "support=${registry}/${ECR_SUPPORT_MCP_REPOSITORY}:${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          for repo in $PUSHED_REPOS; do
+            aws ecr batch-delete-image --repository-name "$repo" --image-ids "imageTag=${IMAGE_TAG}" >/dev/null
+            echo "deleted $repo:${IMAGE_TAG:0:12}"
+          done
 
-      # Fails fast (before touching any runtime) if a rollback tag was expired by the ECR lifecycle rule.
-      - name: Check both images exist in ECR
-        run: |
-          aws ecr describe-images --repository-name "$ECR_AGENT_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" --query 'imageDetails[0].imagePushedAt'
-          aws ecr describe-images --repository-name "$ECR_SUPPORT_MCP_REPOSITORY" --image-ids imageTag="$IMAGE_TAG" --query 'imageDetails[0].imagePushedAt'
-
-      # Skills are read by the agent at cold start; the runtime update below starts fresh sessions.
-      - name: Sync skills to S3
-        run: |
-          src=skills; [ -d rollback/skills ] && src=rollback/skills
-          aws s3 sync "$src/" "s3://${ARTIFACTS_BUCKET}/skills/" --delete --exclude "*__pycache__*" --no-progress
-
-      - name: Roll out support MCP image
-        env:
-          IMAGE: ${{ steps.img.outputs.support }}
-        run: >
-          uv run --no-sync python scripts/ci/update_runtime_image.py update-runtime
-          --region "$AWS_REGION" --runtime-id "$SUPPORT_MCP_RUNTIME_ID" --image "$IMAGE"
-
-      - name: Re-synchronize the Gateway support target
-        run: >
-          uv run --no-sync python scripts/ci/update_runtime_image.py sync-target
-          --region "$AWS_REGION" --gateway-id "$GATEWAY_ID" --target-name "$SUPPORT_TARGET_NAME"
-
-      - name: Roll out agent image
-        env:
-          IMAGE: ${{ steps.img.outputs.agent }}
-        run: >
-          uv run --no-sync python scripts/ci/update_runtime_image.py update-runtime
-          --region "$AWS_REGION" --runtime-id "$AGENT_RUNTIME_ID" --image "$IMAGE"
-
-      - name: Summary
-        env:
-          AGENT_IMAGE: ${{ steps.img.outputs.agent }}
-          SUPPORT_IMAGE: ${{ steps.img.outputs.support }}
-        run: |
-          {
-            echo "### Deployed \`${IMAGE_TAG}\`"
-            echo "- agent: \`${AGENT_IMAGE}\` -> \`${AGENT_RUNTIME_ID}\`"
-            echo "- support MCP: \`${SUPPORT_IMAGE}\` -> \`${SUPPORT_MCP_RUNTIME_ID}\`"
-            echo "- skills synced to \`s3://${ARTIFACTS_BUCKET}/skills/\`, target \`${SUPPORT_TARGET_NAME}\` re-synchronized"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  # ------------------------------------------------------------------ 4. optional end-to-end check
-  # Talks to Cognito and the runtimes over HTTPS with demo-user tokens: no AWS credentials needed.
-  # --no-reseed because the CI role may not write DynamoDB; scenario a (a real return) is off by default.
-  smoke:
-    needs: deploy
-    if: >-
-      !cancelled() && needs.deploy.result == 'success' &&
-      (inputs.run_smoke == true || vars.RUN_SMOKE == 'true')
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          python-version: "3.12"
-          enable-cache: true
-      - run: uv sync --frozen --no-dev
-      - name: Recreate .deploy/ from secrets
-        env:
-          OUTPUTS: ${{ secrets.DEPLOY_OUTPUTS_JSON }}
-          USERS: ${{ secrets.DEPLOY_USERS_JSON }}
-        run: |
-          if [ -z "$OUTPUTS" ] || [ -z "$USERS" ]; then
-            echo "::warning::DEPLOY_OUTPUTS_JSON / DEPLOY_USERS_JSON secrets not set; skipping smoke test"
-            echo "SKIP_SMOKE=1" >> "$GITHUB_ENV"; exit 0
-          fi
-          mkdir -p .deploy
-          printf '%s' "$OUTPUTS" > .deploy/outputs.json
-          (umask 077; printf '%s' "$USERS" > .deploy/users.json)
-      - name: Access demo (scripts/demo_access.py)
-        if: env.SKIP_SMOKE != '1'
-        env:
-          SCENARIOS: ${{ vars.SMOKE_SCENARIOS || 'b,c,d' }}
-        run: uv run --no-sync python scripts/demo_access.py --no-reseed --only "$SCENARIOS"
-      - name: Remove .deploy/
+      - name: Remove local credentials files
         if: always()
-        run: rm -rf .deploy
+        run: rm -rf .deploy infra/terraform/tfplan infra/terraform/*.log

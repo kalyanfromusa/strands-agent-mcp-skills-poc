@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShopAssist Chat</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --ink: #1d232b; --muted: #5a6573; --line: #d9dee5;
+    --accent: #3b4fd8; --accent-soft: #e9ecff; --ok: #1f7a4a; --ok-soft: #e4f4ea;
+    --warn: #8a5a00; --warn-soft: #fff4dc; --risk: #a3262b; --risk-soft: #fde8e8; --code: #f0f2f5;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 "Segoe UI", system-ui, -apple-system, Roboto, Arial, sans-serif;
+         display: grid; grid-template-rows: auto 1fr; }
+  header { background: #161b33; color: #fff; padding: 12px 20px; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 1.15rem; margin: 0; font-weight: 600; }
+  header .target { color: #9aa3cf; font-size: .8rem; font-family: Consolas, Menlo, monospace; word-break: break-all; }
+  .layout { display: grid; grid-template-columns: 380px 1fr; min-height: 0; }
+  aside { border-right: 1px solid var(--line); background: var(--panel); overflow-y: auto; padding: 14px 16px 30px; }
+  main { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
+  h2 { font-size: .95rem; margin: 18px 0 8px; }
+  h2:first-child { margin-top: 0; }
+  label { font-weight: 600; font-size: .85rem; display: block; margin-bottom: 4px; }
+  textarea, input[type=text] { width: 100%; font: 12px/1.4 Consolas, Menlo, monospace; border: 1px solid var(--line);
+                               border-radius: 6px; padding: 8px; background: #fcfcfd; color: var(--ink); }
+  textarea:focus, input:focus, button:focus-visible, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: #fff; color: var(--ink);
+           border-radius: 6px; padding: 6px 12px; }
+  button:hover { background: #eef0f4; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover { background: #2f41b8; }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .claims { margin-top: 10px; font-size: .82rem; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .claims div { display: grid; grid-template-columns: 110px 1fr; border-top: 1px solid var(--line); }
+  .claims div:first-child { border-top: none; }
+  .claims span { padding: 4px 8px; word-break: break-all; }
+  .claims span:first-child { background: #f3f4f7; color: var(--muted); }
+  .note { font-size: .8rem; color: var(--muted); margin: 6px 0; }
+  .banner { padding: 7px 10px; border-radius: 6px; font-size: .82rem; margin-top: 8px; }
+  .banner.warn { background: var(--warn-soft); color: var(--warn); }
+  .banner.risk { background: var(--risk-soft); color: var(--risk); }
+  .banner.ok { background: var(--ok-soft); color: var(--ok); }
+  code { font-family: Consolas, Menlo, monospace; font-size: .85em; background: var(--code); padding: 1px 4px; border-radius: 3px; }
+  pre.cmd { background: #10142a; color: #e3e7ff; padding: 8px 10px; border-radius: 6px; font-size: 11px; white-space: pre-wrap; word-break: break-all; }
+  details { border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; margin: 8px 0; }
+  details summary { cursor: pointer; font-weight: 600; font-size: .85rem; }
+
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+  .tabs button { border: 1px solid transparent; border-bottom: none; border-radius: 6px 6px 0 0; background: none; color: var(--muted); }
+  .tabs button[aria-selected=true] { background: var(--panel); border-color: var(--line); color: var(--accent); font-weight: 600; margin-bottom: -1px; box-shadow: inset 0 2px 0 var(--accent); }
+  .convo { border: 1px solid var(--line); border-radius: 8px; margin: 10px 0; overflow: hidden; }
+  .convo-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; background: #f3f4f7; padding: 7px 10px; }
+  .convo-head strong { font-size: .86rem; }
+  .convo-head button { padding: 3px 9px; font-size: .78rem; }
+  .convo ol { margin: 0; padding: 6px 10px 8px 28px; }
+  .convo li { margin: 6px 0; }
+  .turn { display: block; width: 100%; text-align: left; padding: 5px 8px; font-size: .84rem; background: var(--accent-soft); border-color: #c9d0ff; }
+  .turn:hover { background: #dce1ff; }
+  .expect { font-size: .78rem; color: var(--muted); margin-top: 3px; }
+  .expect code { font-size: .74rem; }
+
+  .chatbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 18px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  .chatbar .who { font-size: .85rem; }
+  .chatbar .sid { font: 11px Consolas, Menlo, monospace; color: var(--muted); }
+  #log { overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 820px; padding: 10px 14px; border-radius: 10px; white-space: pre-wrap; word-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 3px; }
+  .msg.agent { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 3px; }
+  .msg.error { align-self: flex-start; background: var(--risk-soft); color: var(--risk); border: 1px solid #f3c2c4; }
+  .msg.system { align-self: center; background: none; color: var(--muted); font-size: .8rem; padding: 2px; }
+  .meta { display: block; margin-top: 8px; font: 11px Consolas, Menlo, monospace; color: var(--muted); white-space: normal; }
+  .meta .lbl { color: #8b94a3; }
+  .typing { align-self: flex-start; color: var(--muted); font-size: .85rem; }
+  .composer { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--line); background: var(--panel); }
+  .composer textarea { font: 14px/1.4 "Segoe UI", system-ui, sans-serif; resize: vertical; min-height: 44px; max-height: 200px; }
+  .empty { margin: auto; text-align: center; color: var(--muted); max-width: 520px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } aside { border-right: none; border-bottom: 1px solid var(--line); max-height: 45vh; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>ShopAssist Chat</h1>
+  <span class="target" id="target">loading config…</span>
+</header>
+
+<div class="layout">
+  <aside aria-label="Identity and sample conversations">
+    <h2>1 · Caller identity (JWT)</h2>
+    <div id="localBox" hidden>
+      <div class="banner warn">
+        <strong>Local mode.</strong> The agent runs on your machine with <code>GATEWAY_AUTH_MODE=none</code>, so nothing checks the token.
+        The tools you get come from <code>local_gateway.py --role admin|viewer</code>, not from the token. carol's 401/403 can't be reproduced locally (no Runtime authorizer).
+        The agent keeps one conversation per process: <em>New session</em> doesn't clear its memory, so restart <code>agent/app.py</code> for a fresh start.
+      </div>
+      <div class="row">
+        <button type="button" id="dummyAdmin">Dummy token: alice (admin)</button>
+        <button type="button" id="dummyViewer">Dummy token: bob (viewer)</button>
+      </div>
+    </div>
+    <label for="token">Cognito <em>access</em> token</label>
+    <textarea id="token" rows="5" spellcheck="false" autocomplete="off" placeholder="eyJraWQiOi… (Bearer prefix optional)"></textarea>
+    <div class="row">
+      <button type="button" id="apply" class="primary">Use token</button>
+      <button type="button" id="clearTok">Clear</button>
+    </div>
+    <div id="tokStatus" role="status" aria-live="polite"></div>
+    <div id="claims"></div>
+    <p class="note">Claims are decoded in the browser for display only. The signature is checked by the AgentCore Runtime, not by this page. The token stays in this tab's memory and isn't saved anywhere.</p>
+
+    <details>
+      <summary>How to get a token</summary>
+      <p class="note">Quickest: the helper signs in a demo user from <code>.deploy/users.json</code>.</p>
+      <pre class="cmd">.venv\Scripts\python.exe scripts\chat_ui.py --print-token alice</pre>
+      <p class="note">Or with the AWS CLI (use the <strong>AccessToken</strong>, not the IdToken):</p>
+      <pre class="cmd" id="cliCmd">aws cognito-idp initiate-auth --region &lt;region&gt; --auth-flow USER_PASSWORD_AUTH --client-id &lt;cognito_users_client_id&gt; --auth-parameters USERNAME=alice,PASSWORD=&lt;password&gt; --query AuthenticationResult.AccessToken --output text</pre>
+      <p class="note"><strong>From the AWS console</strong> (no local AWS CLI needed):</p>
+      <ol class="note" style="padding-left:18px;margin:4px 0">
+        <li>Pick the deployment's region (top right), open <strong>Amazon Cognito → User pools → shopassist-pool → App clients → shopassist-users</strong> (left menu, under <em>Applications</em>) and copy the <em>Client ID</em>.</li>
+        <li>Open <strong>CloudShell</strong> (terminal icon in the console's top bar).</li>
+        <li>Run the command above with that client id and the user's password from <code>.deploy/users.json</code>.</li>
+        <li>Copy the printed token and paste it here.</li>
+      </ol>
+      <p class="note">The users client only allows <code>USER_PASSWORD_AUTH</code> (no hosted login page), so the console's "View login page" won't issue a token for it. Details: <code>docs/11-chat-ui.md</code>.</p>
+      <p class="note">Tokens expire after 60 minutes. An M2M (client_credentials) token is rejected by the agent runtime.</p>
+    </details>
+
+    <h2>2 · Sample conversations</h2>
+    <p class="note">Click a turn to send it, or <em>Run</em> to play the whole conversation in order. Each conversation assumes the matching user's token. Replies are paraphrased expectations, not exact text.</p>
+    <div class="tabs" role="tablist" aria-label="Demo users" id="userTabs"></div>
+    <div id="samples"></div>
+
+    <details>
+      <summary>Data notes</summary>
+      <p class="note">Dates in <code>data/seed.json</code> are relative, so these cases hold right after seeding. Creating a return changes the data: after alice returns the 1042 headphones, the next check says "already returned". Reset with:</p>
+      <pre class="cmd">.venv\Scripts\python.exe scripts\seed_data.py --region &lt;region&gt;</pre>
+      <p class="note">Run bob's conversations before alice's return, or re-seed between runs.</p>
+    </details>
+  </aside>
+
+  <main>
+    <div class="chatbar">
+      <div class="who" id="who">No token yet</div>
+      <div class="row" style="margin:0">
+        <span class="sid" id="sid"></span>
+        <button type="button" id="newSession" title="Start a new runtime session (the agent forgets the conversation)">New session</button>
+        <button type="button" id="clearLog">Clear chat</button>
+      </div>
+    </div>
+    <div id="log" role="log" aria-live="polite" aria-label="Conversation">
+      <div class="empty" id="empty">
+        <p><strong>Paste a JWT, then start chatting.</strong></p>
+        <p>The same session id is reused for every message, so the agent remembers the conversation (one microVM per session). Use <em>New session</em> to start fresh, for example after uploading a new skill.</p>
+      </div>
+    </div>
+    <form class="composer" id="composer">
+      <label for="prompt" class="sr-only">Message</label>
+      <textarea id="prompt" rows="2" placeholder="Ask about an order, a return or a support question… (Enter to send, Shift+Enter for a new line)" disabled></textarea>
+      <button type="submit" class="primary" id="send" disabled>Send</button>
+    </form>
+  </main>
+</div>
+
+<script>
+"use strict";
+
+/* ---------------------------------------------------------------- sample conversations
+   Grounded in data/seed.json (relative dates) and docs/01-02. Expected replies are paraphrased. */
+const SAMPLES = {
+  alice: {
+    label: "alice", group: "Group-ShopAssist-Admin",
+    intro: "Admin: all 7 tools. Full flows, including creating returns and tickets.",
+    convos: [
+      { title: "Order history and tracking", turns: [
+        { say: "Hi, I'm customer C001. What have I ordered recently?",
+          expect: "Lists 1042, 1007, 1001, 1002 (newest first) with status and totals.", tools: "orders___list_customer_orders" },
+        { say: "Where is order 1042?",
+          expect: "Delivered 5 days ago by UPS, tracking 1Z999AA10000001042.", tools: "orders___get_order" },
+      ]},
+      { title: "Eligible return, end to end", turns: [
+        { say: "I'd like to return the headphones from order 1042, they're not comfortable.",
+          expect: "Eligible: electronics, 5 of 15 days. Refund $199.99. Asks you to confirm.", tools: "orders___get_order, orders___check_return_eligibility" },
+        { say: "Yes, please go ahead.",
+          expect: "Return RET-…, refund $199.99, label link. Changes data: re-seed to repeat.", tools: "orders___create_return" },
+      ]},
+      { title: "Refusals, explained by the tool", turns: [
+        { say: "Can I return the ceramic lamp from order 1002?",
+          expect: "No: delivered 45 days ago, outside the 30-day window.", tools: "orders___check_return_eligibility" },
+        { say: "What about the wool beanie from order 1007?",
+          expect: "No: already returned. The touchscreen gloves in the same order are still eligible ($18.00).", tools: "orders___check_return_eligibility" },
+        { say: "Can I return the smartwatch from order 1004?",
+          expect: "No: delivered 20 days ago, outside the 15-day electronics window. Offers a support ticket.", tools: "orders___check_return_eligibility" },
+        { say: "And the clearance swimsuit from order 1005?",
+          expect: "No: final-sale item. The sunglasses in that order would be returnable.", tools: "orders___check_return_eligibility" },
+      ]},
+      { title: "Delayed parcel → ticket", turns: [
+        { say: "My order 1006 says shipped but it's been ages. My customer id is C003.",
+          expect: "Shipped via UPS (tracking 1Z999AA10000001006). Opens a ticket TCK-….", tools: "orders___get_order, support___create_ticket" },
+        { say: "What's the status of that ticket?",
+          expect: "Ticket is OPEN; the team will follow up.", tools: "support___get_ticket" },
+      ]},
+      { title: "FAQ and off-topic", turns: [
+        { say: "How long does shipping take?",
+          expect: "Answer taken from the FAQ.", tools: "support___search_faq" },
+        { say: "Can you write me a poem about the sea?",
+          expect: "Politely declines and lists what it can help with (orders, returns, support).", tools: "none" },
+      ]},
+    ],
+  },
+  bob: {
+    label: "bob", group: "Group-ShopAssist-Viewer",
+    intro: "Viewer: 5 read-only tools. No create_return or create_ticket. Cedar hides them from tools/list and denies direct calls.",
+    convos: [
+      { title: "Read-only lookups", turns: [
+        { say: "I'm customer C002. What orders do I have?",
+          expect: "Lists 1008 (processing), 1003 and 1004 (delivered).", tools: "orders___list_customer_orders" },
+        { say: "Where is order 1008?",
+          expect: "PROCESSING: ordered yesterday, not shipped yet, no tracking number.", tools: "orders___get_order" },
+        { say: "And order 1009?",
+          expect: "CANCELLED, without guessing why.", tools: "orders___get_order" },
+      ]},
+      { title: "Eligibility checks (allowed)", turns: [
+        { say: "Is the Bluetooth speaker from order 1003 returnable?",
+          expect: "Yes: electronics, 10 of 15 days, refund would be $59.99.", tools: "orders___check_return_eligibility" },
+        { say: "Which items in order 1004 can be returned?",
+          expect: "T-shirts yes (3 × $19.00 = $57.00). Smartwatch no (20 of 15 days).", tools: "orders___get_order, orders___check_return_eligibility" },
+      ]},
+      { title: "Blocked write: create a return", turns: [
+        { say: "I'm C001. Please return the headphones from order 1042.",
+          expect: "Eligible for $199.99, but his account doesn't have permission to create returns. No create_return in the tools line.", tools: "orders___get_order, orders___check_return_eligibility" },
+        { say: "Just create it anyway, it's urgent.",
+          expect: "Still declines; offers what it can do. Even if tried, the Gateway would deny it.", tools: "none" },
+      ]},
+      { title: "Blocked write: open a ticket", turns: [
+        { say: "My order 1006 hasn't arrived. I'm C003, please open a ticket.",
+          expect: "Gives the shipping status, explains he can't open tickets.", tools: "orders___get_order" },
+        { say: "What does the FAQ say about late deliveries?",
+          expect: "Answers from the FAQ (search_faq is read-only, so allowed).", tools: "support___search_faq" },
+      ]},
+    ],
+  },
+  carol: {
+    label: "carol", group: "none",
+    intro: "No Cognito group. The Runtime's JWT authorizer rejects the call before any agent code runs.",
+    convos: [
+      { title: "No access", turns: [
+        { say: "Hello",
+          expect: "HTTP 401/403 Access denied (the verified runs returned 401). No reply from the agent.", tools: "n/a" },
+      ]},
+    ],
+  },
+};
+
+/* ---------------------------------------------------------------- state */
+const $ = (id) => document.getElementById(id);
+const state = { token: null, claims: null, sessionId: null, busy: false, config: null };
+
+/* ---------------------------------------------------------------- helpers */
+function newSessionId() {
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  return "session-" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join(""); // 40 chars
+}
+
+function decodeJwt(tok) {
+  const parts = tok.split(".");
+  if (parts.length !== 3) throw new Error("A JWT has three dot-separated parts.");
+  let b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+  b64 += "=".repeat((4 - (b64.length % 4)) % 4);
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+function el(tag, attrs = {}, ...children) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") n.className = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v);
+  }
+  for (const c of children) n.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return n;
+}
+
+function setBanner(kind, text) {
+  const s = $("tokStatus");
+  s.replaceChildren();
+  if (text) s.append(el("div", { class: "banner " + kind }, text));
+}
+
+function groupsOf(claims) {
+  const g = claims && claims["cognito:groups"];
+  return Array.isArray(g) ? g : g ? [String(g)] : [];
+}
+
+function fmtExp(claims) {
+  if (!claims || !claims.exp) return "n/a";
+  const secs = Math.round(claims.exp - Date.now() / 1000);
+  const when = new Date(claims.exp * 1000).toLocaleTimeString();
+  return secs > 0 ? `${when} (in ${Math.floor(secs / 60)} min)` : `${when} (EXPIRED)`;
+}
+
+/* ---------------------------------------------------------------- token handling */
+function applyToken() {
+  let raw = $("token").value.trim();
+  if (raw.toLowerCase().startsWith("bearer ")) raw = raw.slice(7).trim();
+  if (!raw) { setBanner("warn", "Paste a token first."); return; }
+  let claims;
+  try { claims = decodeJwt(raw); }
+  catch (e) { setBanner("risk", "Couldn't decode the token: " + e.message); return; }
+
+  const sameUser = state.claims && state.claims.sub === claims.sub;
+  state.token = raw;
+  state.claims = claims;
+
+  const groups = groupsOf(claims);
+  const rows = [
+    ["username", claims.username || claims["cognito:username"] || "?"],
+    ["groups", groups.length ? groups.join(", ") : "(none)"],
+    ["token_use", claims.token_use || "?"],
+    ["client_id", claims.client_id || claims.aud || "?"],
+    ["scope", claims.scope || ""],
+    ["expires", fmtExp(claims)],
+    ["sub", claims.sub || "?"],
+  ];
+  $("claims").replaceChildren(el("div", { class: "claims" },
+    ...rows.map(([k, v]) => el("div", {}, el("span", {}, k), el("span", {}, v)))));
+
+  const warnings = [];
+  if (claims.token_use && claims.token_use !== "access") warnings.push("This is an " + claims.token_use + " token. The runtime expects the access token.");
+  if (claims.exp && claims.exp * 1000 < Date.now()) warnings.push("Token has expired. Sign in again.");
+  const usersClient = state.config && state.config.cognito_users_client_id;
+  if (usersClient && claims.client_id && claims.client_id !== usersClient) warnings.push("client_id isn't the users client from outputs.json (an M2M token or a stale deployment?).");
+  if (!groups.includes("Group-ShopAssist-Admin") && !groups.includes("Group-ShopAssist-Viewer")) warnings.push("No allowed group: expect HTTP 401/403 (like carol).");
+  if (warnings.length) setBanner("warn", warnings.join(" "));
+  else setBanner("ok", groups.includes("Group-ShopAssist-Admin") ? "Admin token: all tools." : "Viewer token: read-only tools.");
+
+  if (!sameUser) {
+    resetSession(`Token for ${rows[0][1]} applied. New session started.`);
+    const guess = groups.includes("Group-ShopAssist-Admin") ? "alice" : groups.includes("Group-ShopAssist-Viewer") ? "bob" : "carol";
+    selectUser(guess);
+  }
+  updateChrome();
+}
+
+function clearToken() {
+  state.token = null; state.claims = null;
+  $("token").value = "";
+  $("claims").replaceChildren();
+  setBanner("", "");
+  updateChrome();
+}
+
+function resetSession(note) {
+  state.sessionId = newSessionId();
+  if (note) addSystem(note);
+  updateChrome();
+}
+
+function updateChrome() {
+  const c = state.claims;
+  const name = c ? (c.username || c["cognito:username"] || c.sub) : null;
+  $("who").replaceChildren(c
+    ? el("span", {}, "Chatting as ", el("strong", {}, name), " · ", groupsOf(c).join(", ") || "no group")
+    : document.createTextNode("No token yet"));
+  $("sid").textContent = state.sessionId ? state.sessionId : "";
+  const ready = !!state.token && !state.busy;
+  $("prompt").disabled = !state.token;
+  $("send").disabled = !ready;
+  document.querySelectorAll("[data-sample]").forEach((b) => (b.disabled = !ready));
+}
+
+/* ---------------------------------------------------------------- chat log */
+function hideEmpty() { const e = $("empty"); if (e) e.remove(); }
+function scrollDown() { const l = $("log"); l.scrollTop = l.scrollHeight; }
+function addSystem(text) { hideEmpty(); $("log").append(el("div", { class: "msg system" }, text)); scrollDown(); }
+function addUser(text) { hideEmpty(); $("log").append(el("div", { class: "msg user" }, text)); scrollDown(); }
+
+function addAgent(result, elapsedMs) {
+  const skills = (result.skills_used || []).join(", ") || "-";
+  const tools = (result.tools_used || []).join(", ") || "-";
+  const meta = el("span", { class: "meta" },
+    el("span", { class: "lbl" }, "skills: "), skills, "  |  ",
+    el("span", { class: "lbl" }, "tools: "), tools,
+    elapsedMs != null ? `  |  ${(elapsedMs / 1000).toFixed(1)} s` : "");
+  const cls = result.error ? "msg error" : "msg agent";
+  $("log").append(el("div", { class: cls }, result.response || "(empty reply)", meta));
+  scrollDown();
+}
+
+function addError(text) { $("log").append(el("div", { class: "msg error" }, text)); scrollDown(); }
+
+/* ---------------------------------------------------------------- send */
+async function send(prompt) {
+  prompt = prompt.trim();
+  if (!prompt || !state.token || state.busy) return false;
+  if (!state.sessionId) state.sessionId = newSessionId();
+  state.busy = true; updateChrome();
+  addUser(prompt);
+  const typing = el("div", { class: "typing" }, "Agent is working… (the first call of a session includes a cold start)");
+  $("log").append(typing); scrollDown();
+  let ok = false;
+  try {
+    const resp = await fetch("/api/invoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: state.token, session_id: state.sessionId, prompt }),
+    });
+    const data = await resp.json().catch(() => ({ error: "non-JSON reply from the local relay" }));
+    if (!resp.ok) {
+      addError(`Relay error (HTTP ${resp.status}): ${data.error || ""}`);
+    } else if (data.status === 401 || data.status === 403) {
+      addError(`Access denied (HTTP ${data.status}): the Runtime's JWT authorizer rejected this token, so no agent code ran.\n${(data.error || "").slice(0, 300)}`);
+    } else if (data.status >= 400) {
+      addError(`Agent error (HTTP ${data.status}): ${(data.error || "").slice(0, 800)}`);
+    } else {
+      addAgent(data.result || {}, data.elapsed_ms);
+      ok = true;
+    }
+  } catch (e) {
+    addError("Couldn't reach the local relay. Is scripts/chat_ui.py still running? " + e.message);
+  } finally {
+    typing.remove();
+    state.busy = false; updateChrome();
+    $("prompt").focus();
+  }
+  return ok;
+}
+
+async function runConvo(turns) {
+  for (const t of turns) {
+    const ok = await send(t.say);
+    if (!ok) { addSystem("Stopped the sample conversation after an error."); return; }
+  }
+}
+
+/* ---------------------------------------------------------------- samples UI */
+let currentUser = "alice";
+
+function selectUser(user) {
+  currentUser = user;
+  document.querySelectorAll("#userTabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.user === user)));
+  renderSamples();
+}
+
+function renderSamples() {
+  const s = SAMPLES[currentUser];
+  const box = $("samples");
+  box.replaceChildren(el("p", { class: "note" }, el("strong", {}, `${s.label} · ${s.group}. `), s.intro));
+  for (const c of s.convos) {
+    const runBtn = el("button", { type: "button", "data-sample": "1", onclick: () => runConvo(c.turns) }, "Run");
+    const list = el("ol", {});
+    for (const t of c.turns) {
+      const btn = el("button", { type: "button", class: "turn", "data-sample": "1", onclick: () => send(t.say) }, t.say);
+      list.append(el("li", {}, btn,
+        el("div", { class: "expect" }, "Expect: ", t.expect, " ", el("code", {}, t.tools))));
+    }
+    box.append(el("div", { class: "convo" }, el("div", { class: "convo-head" }, el("strong", {}, c.title), runBtn), list));
+  }
+  updateChrome();
+}
+
+function renderTabs() {
+  const tabs = $("userTabs");
+  for (const [user, s] of Object.entries(SAMPLES)) {
+    tabs.append(el("button", { type: "button", role: "tab", "data-user": user, "aria-selected": "false",
+                               onclick: () => selectUser(user) }, `${s.label} (${s.group})`));
+  }
+}
+
+/* ---------------------------------------------------------------- local mode */
+function useDummyToken(user, group) {
+  const b64 = (o) => btoa(JSON.stringify(o)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+  const now = Math.floor(Date.now() / 1000);
+  const payload = { sub: "local-" + user, username: user + " (local)", "cognito:groups": [group],
+                    token_use: "access", iat: now, exp: now + 12 * 3600 };
+  // Unsigned and only meaningful locally: the deployed Runtime would reject it.
+  $("token").value = b64({ alg: "none", typ: "JWT" }) + "." + b64(payload) + ".local";
+  applyToken();
+}
+
+/* ---------------------------------------------------------------- wiring */
+$("dummyAdmin").addEventListener("click", () => useDummyToken("alice", "Group-ShopAssist-Admin"));
+$("dummyViewer").addEventListener("click", () => useDummyToken("bob", "Group-ShopAssist-Viewer"));
+$("apply").addEventListener("click", applyToken);
+$("clearTok").addEventListener("click", clearToken);
+$("newSession").addEventListener("click", () => resetSession("New session: the agent starts without memory of the previous conversation."));
+$("clearLog").addEventListener("click", () => $("log").replaceChildren());
+$("composer").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const p = $("prompt").value;
+  if (p.trim() && !state.busy) { $("prompt").value = ""; send(p); }
+});
+$("prompt").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("composer").requestSubmit(); }
+});
+
+(async function init() {
+  renderTabs();
+  selectUser("alice");
+  try {
+    const cfg = await (await fetch("/api/config")).json();
+    state.config = cfg;
+    $("target").textContent = `→ ${cfg.target_url}` + (cfg.target === "local" ? "  (local agent)" : "")
+      + (cfg.deployed_by ? `  (deployed by ${cfg.deployed_by})` : "");
+    $("localBox").hidden = cfg.target !== "local";
+    if (cfg.region && cfg.cognito_users_client_id) {
+      $("cliCmd").textContent = `aws cognito-idp initiate-auth --region ${cfg.region} --auth-flow USER_PASSWORD_AUTH --client-id ${cfg.cognito_users_client_id} --auth-parameters USERNAME=alice,PASSWORD=<password> --query AuthenticationResult.AccessToken --output text`;
+    }
+  } catch {
+    $("target").textContent = "couldn't load /api/config: open this page through scripts/chat_ui.py";
+  }
+  updateChrome();
+})();
+</script>
+</body>
+</html>

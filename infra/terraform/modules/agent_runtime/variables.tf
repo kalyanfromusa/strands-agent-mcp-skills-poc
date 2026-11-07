@@ -2,7 +2,7 @@
 # modules/agent_runtime/variables.tf: inputs of the agent runtime module
 #
 # What this file does
-#   Declares what the agent runtime needs: naming, its code zip, the skills location, the model, the
+#   Declares what the agent runtime needs: naming, its container image, the skills location, the model, the
 #   Gateway URL, and who may call the agent.
 #
 # Where it fits
@@ -10,7 +10,7 @@
 #   "identity" and "gateway" and the root variable model_id.
 #
 # Step by step
-#   1. Receive the zip location and skills location from module "data".
+#   1. Receive the image URI (root main.tf) and the skills location (module "data").
 #   2. Receive the model id and the Gateway URL.
 #   3. Receive the login settings: which Cognito client and which groups may call the agent.
 #
@@ -20,13 +20,18 @@
 #   Cognito group: a named set of users; group names are written into each member's token.
 # =====================================================================================================
 
-# Naming and location, and where the code zip is stored in S3 (bucket, key and exact version).
+# Naming and location. name_prefix includes the environment, e.g. shopassist-prod. bucket: the
+# artifacts bucket that holds skills/.
 variable "name_prefix" { type = string }
 variable "region" { type = string }
 variable "account_id" { type = string }
 variable "bucket" { type = string }
-variable "zip_key" { type = string }
-variable "zip_version_id" { type = string }
+
+# The container image to run: <account>.dkr.ecr.<region>.amazonaws.com/shopassist-agent:<git sha>,
+# the ARN of its ECR repository (pull permission), and the permissions boundary every role must carry.
+variable "image_uri" { type = string }
+variable "ecr_repository_arn" { type = string }
+variable "permissions_boundary_arn" { type = string }
 
 variable "skills_prefix" {
   description = "Key prefix of the skills folder in the bucket (e.g. skills/)."

@@ -2,7 +2,7 @@
 # modules/mcp_runtime/variables.tf: inputs of the support MCP server module
 #
 # What this file does
-#   Declares the values the support server needs: naming, its code zip, the tickets table and the
+#   Declares the values the support server needs: naming, its container image, the tickets table and the
 #   login (token-checking) settings.
 #
 # Where it fits
@@ -10,7 +10,7 @@
 #   "identity".
 #
 # Step by step
-#   1. Receive the zip location and tickets table from module "data".
+#   1. Receive the image URI (root main.tf) and the tickets table (module "data").
 #   2. Receive the Cognito discovery URL and the allowed client id (the M2M client) from "identity".
 #
 # Key terms
@@ -19,13 +19,16 @@
 #   App client id: the id of a Cognito application; each token records which client it came from.
 # =====================================================================================================
 
-# Naming and location, and where the code zip is stored in S3 (bucket, key and exact version).
+# Naming and location. name_prefix includes the environment, e.g. shopassist-prod.
 variable "name_prefix" { type = string }
 variable "region" { type = string }
 variable "account_id" { type = string }
-variable "bucket" { type = string }
-variable "zip_key" { type = string }
-variable "zip_version_id" { type = string }
+
+# The container image to run (<repo>:<git sha>), its ECR repository ARN (pull permission), and the
+# permissions boundary every role must carry.
+variable "image_uri" { type = string }
+variable "ecr_repository_arn" { type = string }
+variable "permissions_boundary_arn" { type = string }
 # The tickets table: the name goes into the server's settings, the ARN into its permissions.
 variable "tickets_table_name" { type = string }
 variable "tickets_table_arn" { type = string }

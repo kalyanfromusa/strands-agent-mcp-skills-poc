@@ -4,8 +4,7 @@
 // secret, no person involved) list and call every tool. Developers and automated smoke tests use it to
 // talk to the Gateway directly, without going through the agent.
 //
-// Where it fits: uploaded into the AgentCore policy engine by Terraform (modules/gateway) and boto3
-// (infra/boto3/steps/policy.py). Before upload, the client id placeholder in the condition below is
+// Where it fits: uploaded into the AgentCore policy engine by Terraform (modules/gateway). Before upload, the client id placeholder in the condition below is
 // replaced with the real M2M client id. Under the Gateway's default-deny (ENFORCE) mode, without this
 // permit the M2M client could log in but would see no tools at all.
 // Note: this whole file, comments included, is the policy text sent to AWS, so editing a comment

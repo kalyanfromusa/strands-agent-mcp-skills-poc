@@ -1,0 +1,3 @@
+# Support MCP server: direct dependencies. scripts/pin_requirements.py turns this into requirements.lock.txt.
+mcp==2.1.1
+boto3>=1.43

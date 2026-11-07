@@ -6,7 +6,7 @@
 #   list_customer_orders, check_return_eligibility, create_return), plus its permissions and log group.
 #
 # Where it fits
-#   Called by the root main.tf (module "lambda_tools") with the zip location and table names from
+#   Called by the root main.tf (module "lambda_tools") with its container image and the table names from
 #   module "data". The Gateway's `orders` target calls this Lambda when the agent uses an orders tool;
 #   the Lambda then reads and writes the orders and returns tables in DynamoDB.
 #
@@ -14,7 +14,7 @@
 #   1. Create an IAM role that only the Lambda service may use.
 #   2. Allow that role to read/write the orders and returns tables and to write its own logs.
 #   3. Create the log group /aws/lambda/<prefix>-orders-tools with a short retention.
-#   4. Create the Lambda function from artifacts/orders_lambda.zip, pinned to the uploaded version.
+#   4. Create the Lambda function from the container image <ECR repo>:<git sha> (arm64).
 #
 # Key terms
 #   Lambda: an AWS service that runs a piece of code on demand; you pay only while it runs.
@@ -43,6 +43,9 @@ data "aws_iam_policy_document" "assume" {
 resource "aws_iam_role" "this" {
   name               = "${local.function_name}-role"
   assume_role_policy = data.aws_iam_policy_document.assume.json
+
+  # The ceiling set by the platform stack: the role can never do more than this boundary allows.
+  permissions_boundary = var.permissions_boundary_arn
 }
 
 # Step 2a: what the Lambda may do, and nothing more ("least privilege"):
@@ -89,23 +92,19 @@ resource "aws_cloudwatch_log_group" "this" {
   retention_in_days = var.log_retention_days
 }
 
-# Step 4: the function itself. Python 3.12 on arm64, entry point lambda_handler in handler.py,
-# at most 30 seconds and 256 MB of memory per call. The environment variables tell the code to use
+# Step 4: the function itself, from a container image (Python 3.12 Lambda base image, arm64; the
+# image's CMD names handler.lambda_handler), at most 30 seconds and 256 MB of memory per call.
+# A new image_uri (new git sha) is an in-place update of the function code. The environment variables tell the code to use
 # DynamoDB (not the in-memory store used for local runs, STORE=memory) and which tables to use. depends_on makes sure
 # the log group and permissions exist before the first call can happen.
 resource "aws_lambda_function" "this" {
   function_name = local.function_name
   role          = aws_iam_role.this.arn
-  runtime       = "python3.12"
+  package_type  = "Image"
+  image_uri     = var.image_uri
   architectures = ["arm64"]
-  handler       = "handler.lambda_handler"
   timeout       = 30
   memory_size   = 256
-
-  # Pinning the S3 object version is what makes a rebuilt zip redeploy.
-  s3_bucket         = var.bucket
-  s3_key            = var.zip_key
-  s3_object_version = var.zip_version_id
 
   environment {
     variables = {

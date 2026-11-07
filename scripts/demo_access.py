@@ -5,14 +5,14 @@
     .venv/Scripts/python.exe scripts/demo_access.py --no-reseed  # don't reset the demo orders first
 
 Scenarios (one agent, one Gateway, three users):
-  a  alice (shop-admin) asks the agent to return the 1042 headphones -> orders___create_return is used
-  b  bob (shop-viewer) asks the same -> no create_return, the agent explains he lacks permission
+  a  alice (Group-ShopAssist-Admin) asks the agent to return the 1042 headphones -> orders___create_return is used
+  b  bob (Group-ShopAssist-Viewer) asks the same -> no create_return, the agent explains he lacks permission
   c  carol (no group) -> the Runtime's JWT authorizer rejects her with HTTP 401/403
   d  direct Gateway calls without the agent: bob's tools/list lacks the write tools and his
      tools/call orders___create_return is denied; alice's tools/list shows all 7 tools
 
-Inputs: .deploy/outputs.json (region, agent_runtime_arn, gateway_url, cognito_users_client_id) and
-.deploy/users.json. Scenario (a) creates a real return for order 1042, so by default the demo first
+Inputs: .deploy/<env>/outputs.json (region, agent_runtime_arn, gateway_url, cognito_users_client_id) and
+.deploy/<env>/users.json. Scenario (a) creates a real return for order 1042, so by default the demo first
 re-seeds the orders table (scripts/seed_data.py) to make the item eligible again; bob's scenarios run
 before alice's for the same reason. Exits non-zero when any outcome is unexpected.
 """
@@ -29,11 +29,11 @@ before alice's for the same reason. Exits non-zero when any outcome is unexpecte
 #   re-seed code from scripts/seed_data.py. It costs a few model calls on Bedrock.
 #
 # The four scenarios: what each proves, and which security layer enforces it
-#   a  alice (group shop-admin) asks the agent to return the order 1042 headphones.
+#   a  alice (group Group-ShopAssist-Admin) asks the agent to return the order 1042 headphones.
 #      Proves: an allowed user can do a write action. Every layer allows her: the Runtime sign-in
 #      check, the Gateway sign-in check and the AgentCore Policy. Passes if the agent used
 #      orders___create_return and reported no error.
-#   b  bob (group shop-viewer) sends the same message.
+#   b  bob (group Group-ShopAssist-Viewer) sends the same message.
 #      Proves: a read-only user cannot create a return, and the agent explains why politely.
 #      Enforced by AgentCore Policy: the Gateway hides create_return from bob's tool list, so the
 #      agent cannot call it. The skill's instructions tell the agent to say the account lacks
@@ -50,7 +50,7 @@ before alice's for the same reason. Exits non-zero when any outcome is unexpecte
 #        - alice's tool list has all 7 tools.
 #
 # Step by step
-#   1. Read the options and check .deploy/outputs.json has everything needed.
+#   1. Read the options and check .deploy/<env>/outputs.json has everything needed.
 #   2. If scenario a or b will run, re-seed the orders table so order 1042 is returnable again
 #      (an earlier run of scenario a has already returned it).
 #   3. Run the chosen scenarios in the order b, c, d, a (bob before alice, see RUN_ORDER below).
@@ -59,7 +59,7 @@ before alice's for the same reason. Exits non-zero when any outcome is unexpecte
 #
 # Key terms
 #   JWT authorizer: the Runtime's built-in check of the user's login token (JSON Web Token).
-#   Claim: one fact inside the token, e.g. "cognito:groups": ["shop-viewer"].
+#   Claim: one fact inside the token, e.g. "cognito:groups": ["Group-ShopAssist-Viewer"].
 #   AgentCore Policy / Cedar: per-user permission rules at the Gateway, written in the Cedar language.
 #       Anything not explicitly allowed is denied.
 #   tools/list and tools/call: the two MCP requests "which tools are there?" and "run this tool".

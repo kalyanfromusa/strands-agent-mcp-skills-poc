@@ -49,7 +49,7 @@ output "oauth_provider_secret_arn" {
   )
 }
 
-# The demo logins, e.g. { alice = { username, password, group = "shop-admin" }, ... }.
+# The demo logins, e.g. { alice = { username, password, group = "Group-ShopAssist-Admin" }, ... }.
 # The root main.tf writes this to .deploy/users.json.
 output "demo_users" {
   description = "design.md section 8 format for .deploy/users.json."

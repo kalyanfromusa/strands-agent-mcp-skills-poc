@@ -43,7 +43,7 @@
 # support_endpoint: the HTTPS address of the support MCP server on AgentCore Runtime.
 locals {
   gateway_name       = "${var.name_prefix}-gateway"
-  policy_engine_name = "${var.name_prefix}_policy_engine" # [A-Za-z][A-Za-z0-9_]*, max 48
+  policy_engine_name = "${replace(var.name_prefix, "-", "_")}_policy_engine" # [A-Za-z][A-Za-z0-9_]*, max 48
   arn_prefix         = "arn:aws:bedrock-agentcore:${var.region}:${var.account_id}"
 
   tools = jsondecode(file(var.tools_schema_path))
@@ -92,6 +92,9 @@ data "aws_iam_policy_document" "assume" {
 resource "aws_iam_role" "this" {
   name               = "${local.gateway_name}-role"
   assume_role_policy = data.aws_iam_policy_document.assume.json
+
+  # The ceiling set by the platform stack: the role can never do more than this boundary allows.
+  permissions_boundary = var.permissions_boundary_arn
 }
 
 # Step 2c: what the Gateway may do:

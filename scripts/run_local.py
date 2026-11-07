@@ -6,7 +6,7 @@ Start the emulator first (`scripts/local_gateway.py`), then:
     .venv/Scripts/python.exe scripts/run_local.py --prompt "..."  # one shot
 
 Defaults: GATEWAY_AUTH_MODE=none, GATEWAY_URL=http://localhost:8000/mcp, SKILLS_DIR=./skills,
-MODEL_ID=us.anthropic.claude-haiku-5-5, AWS_REGION=us-east-1. Environment variables override them
+MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0, AWS_REGION=us-east-1. Environment variables override them
 (e.g. GATEWAY_AUTH_MODE=client_credentials with COGNITO_* to talk to the real Gateway).
 """
 
@@ -74,7 +74,7 @@ def main() -> int:
     os.environ.setdefault("GATEWAY_AUTH_MODE", "none")
     os.environ.setdefault("GATEWAY_URL", "http://localhost:8000/mcp")
     os.environ.setdefault("SKILLS_DIR", str(ROOT / "skills"))
-    os.environ.setdefault("MODEL_ID", "us.anthropic.claude-haiku-5-5")
+    os.environ.setdefault("MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0")
     os.environ.setdefault("AWS_REGION", "us-east-1")
     if args.gateway_url:
         os.environ["GATEWAY_URL"] = args.gateway_url

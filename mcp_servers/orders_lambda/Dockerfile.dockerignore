@@ -1,0 +1,5 @@
+# Ignore file for mcp_servers/orders_lambda/Dockerfile (BuildKit picks up <Dockerfile>.dockerignore).
+# The build context is the repo root, so allow-list only what the image needs.
+*
+!mcp_servers/orders_lambda/handler.py
+!mcp_servers/common/*.py

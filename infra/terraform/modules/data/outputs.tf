@@ -2,7 +2,7 @@
 # modules/data/outputs.tf: what the storage module hands to the other modules
 #
 # What this file does
-#   Publishes the bucket name, where each zip was uploaded (key and version), the skills location,
+#   Publishes the bucket name, the skills location,
 #   and the names and ARNs of the three DynamoDB tables.
 #
 # Where it fits
@@ -11,29 +11,16 @@
 #
 # Step by step
 #   1. Report the bucket.
-#   2. Report each zip's key and version id (the version id makes rebuilt code redeploy).
-#   3. Report the skills location, only once all skills files are uploaded.
-#   4. Report the table names (for the code's settings) and ARNs (for permission rules).
+#   2. Report the skills location, only once all skills files are uploaded.
+#   3. Report the table names (for the code's settings) and ARNs (for permission rules).
 #
 # Key terms
 #   ARN (Amazon Resource Name): the unique id of an AWS resource, used in permission rules.
-#   Version id: the id S3 gives one specific upload of a file.
 # =====================================================================================================
 
 # The bucket name and ARN.
 output "artifacts_bucket" { value = aws_s3_bucket.artifacts.id }
 output "artifacts_bucket_arn" { value = aws_s3_bucket.artifacts.arn }
-
-# Where each zip lives in the bucket, e.g. { agent = "artifacts/agent.zip", ... }.
-output "artifact_keys" {
-  value = { for k, o in aws_s3_object.artifact : k => o.key }
-}
-
-# The S3 version id of each uploaded zip. A rebuilt zip gets a new id, which tells Terraform to
-# update the Lambda or runtime that uses it.
-output "artifact_version_ids" {
-  value = { for k, o in aws_s3_object.artifact : k => o.version_id }
-}
 
 # The folder (key prefix) inside the bucket where the skills are stored.
 output "skills_prefix" { value = "skills/" }

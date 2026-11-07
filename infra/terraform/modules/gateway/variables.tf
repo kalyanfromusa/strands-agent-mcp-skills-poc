@@ -24,7 +24,11 @@
 # =====================================================================================================
 
 # Naming and location.
+# name_prefix includes the environment, e.g. shopassist-prod.
 variable "name_prefix" { type = string }
+
+# The permissions boundary (from the platform stack) that the Gateway role must carry.
+variable "permissions_boundary_arn" { type = string }
 variable "region" { type = string }
 variable "account_id" { type = string }
 
