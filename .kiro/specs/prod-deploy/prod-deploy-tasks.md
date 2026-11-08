@@ -115,13 +115,26 @@ Nothing goes in git: secrets, `.deploy/`, `*.tfstate*`, `tfplan`, `dist/`, Entra
       "53 to add" with addresses only. Fixes found along the way: Debian security updates in the slim images, a
       documented Trivy exception for the Lambda RIE (expires 2026-12-31), and CI trust policies switched to GitHub's
       immutable OIDC subject `repo:kalyanfromusa@28615456/strands-agent-mcp-skills-poc@1438682520:*`)*
-- [ ] 6.8 🧪 Merge → `build.yml` builds and scans, **nothing is pushed or deployed**
+- [x] 6.8 🧪 Merge → `build.yml` builds and scans, **nothing is pushed or deployed** *(2026-11-07: run on 9567c7d green, ECR still empty afterwards)*
 - [ ] 6.9 🧪 **First prod deploy**: manual `deploy.yml` (prod) → 👤 approve → images pushed, apply + smoke green
+      *(2026-11-07 run 42425427780: images pushed, **apply 53 added** ✅; smoke c, d ✅ (Runtime 401, Cedar filters + denies);
+      b ❌ only on wording: Haiku 4.5 didn't say "no permission". Skill step 6 fixed; re-deploy pending)*
 - [ ] 6.10 🔑 🧪 `invoke_agent.py --user alice "Where is my order 1042?"`; `demo_access.py` a–d all ✅
 - [ ] 6.11 🧪 Second deploy with a new SHA → in-place runtime update (not a replacement); ECR holds 2 images per repo
 - [ ] 6.12 🧪 Rollback: `deploy.yml` with the previous SHA → the old image is live again
 - [ ] 6.13 🔑 🧪 Negative checks: the plan role can't write (an `AccessDenied` on a test call); a run without the `prod`
       environment can't assume the apply role
+
+## P6b. Create / destroy on demand (requested 2026-11-07)
+- [x] 6b.1 `scripts/leftovers.py`: scans every service by name and tag for one env (or `--all`); `--sweep` removes ECR images,
+      AgentCore Identity secrets in their recovery window, stray log groups and the env state file; exit 1 if anything is left
+      *(2026-11-07: dev → CLEAN; prod → lists every deployed resource correctly)*
+- [x] 6b.2 `.github/workflows/destroy.yml`: typed confirmation, plan -destroy summary, approval, re-plan hash guard, destroy, sweep,
+      final scan *(actionlint clean)*
+- [x] 6b.3 Platform: second apply-role policy `shopassist-gha-sweep-<env>` (6,144-char managed-policy limit) *(applied 2026-11-07)*
+- [x] 6b.4 `scripts/destroy_everything.sh`: local full teardown (envs → platform → bootstrap → `leftovers.py --all`), typed confirmation
+- [ ] 6b.5 🧪 Destroy prod with `destroy.yml` → leftover scan CLEAN; then `deploy.yml` → prod is back and smoke green
+- [ ] 6b.6 🧪 (when the demo is over) `destroy_everything.sh` → `leftovers.py --all` CLEAN
 
 ## P7. Entra ID federation (cloud-only groups, app roles)
 - [ ] 7.1 Write `docs/12-entra-federation.md` runbook part 1 (tenant, P2 trial, app registration `ShopAssist-Prod`,

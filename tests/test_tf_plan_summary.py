@@ -50,5 +50,17 @@ def test_hash_is_order_independent_and_change_sensitive():
     assert tps.summary_hash(items) != tps.summary_hash(tps.changes(fewer))
 
 
+def test_helper_replace_is_a_rerun_not_a_warning():
+    plan = {"resource_changes": [
+        {"address": "terraform_data.sync_gateway_targets", "type": "terraform_data", "change": {"actions": ["delete", "create"]}},
+        {"address": "module.agent_runtime.aws_bedrockagentcore_agent_runtime.this", "type": "aws_bedrockagentcore_agent_runtime", "change": {"actions": ["update"]}},
+    ]}
+    items = tps.changes(plan)
+    assert dict(items)["terraform_data.sync_gateway_targets"] == "rerun"
+    md = tps.markdown(items, "t")
+    assert "replaces or destroys" not in md
+    assert "1 helper step(s) re-run" in md
+
+
 def test_empty_plan():
     assert "No changes." in tps.markdown(tps.changes({}), "t")

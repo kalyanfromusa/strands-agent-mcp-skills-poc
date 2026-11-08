@@ -318,6 +318,36 @@ data "aws_iam_policy_document" "apply" {
   }
 }
 
+# Step 3b: a second policy for the clean sweep after a destroy. It is separate only because a managed
+# policy may hold at most 6,144 characters, and the apply policy above is close to that.
+data "aws_iam_policy_document" "sweep" {
+  for_each = local.env
+
+  # Clean sweep after a destroy (scripts/leftovers.py, destroy.yml): list calls that only work on
+  #     "*" (they return names, never data), and emptying the ShopAssist ECR repositories.
+  statement {
+    sid = "LeftoverScan"
+    actions = [
+      "bedrock-agentcore:ListAgentRuntimes", "bedrock-agentcore:ListGateways", "bedrock-agentcore:ListPolicyEngines",
+      "bedrock-agentcore:ListOauth2CredentialProviders", "bedrock-agentcore:ListWorkloadIdentities",
+      "lambda:ListFunctions", "iam:ListRoles", "iam:ListPolicies", "secretsmanager:ListSecrets",
+      "ecr:DescribeRepositories", "cognito-idp:ListUserPools",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "EmptyRepos"
+    actions   = ["ecr:ListImages", "ecr:BatchDeleteImage"]
+    resources = local.repo_arns
+  }
+  statement {
+    sid       = "ListBudgets"
+    actions   = ["budgets:ViewBudget"]
+    resources = ["arn:aws:budgets::${local.account_id}:budget/*"]
+  }
+
+}
+
 # ---------------------------------------------------------------- Step 4: the roles
 
 resource "aws_iam_role" "apply" {
@@ -342,4 +372,19 @@ resource "aws_iam_role_policy_attachment" "apply" {
 
   role       = aws_iam_role.apply[each.key].name
   policy_arn = aws_iam_policy.apply[each.key].arn
+}
+
+resource "aws_iam_policy" "sweep" {
+  for_each = local.env
+
+  name        = "${var.name_prefix}-gha-sweep-${each.key}"
+  description = "Clean sweep after destroying the ShopAssist ${each.key} environment (list calls, empty ECR)"
+  policy      = data.aws_iam_policy_document.sweep[each.key].json
+}
+
+resource "aws_iam_role_policy_attachment" "sweep" {
+  for_each = local.env
+
+  role       = aws_iam_role.apply[each.key].name
+  policy_arn = aws_iam_policy.sweep[each.key].arn
 }

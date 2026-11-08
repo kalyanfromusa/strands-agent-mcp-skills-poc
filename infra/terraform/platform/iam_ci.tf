@@ -119,7 +119,9 @@ data "aws_iam_policy_document" "plan" {
       "arn:aws:s3:::${var.name_prefix}-*-artifacts-${local.account_id}-${var.region}/*",
     ]
   }
-  # Table items, secret values, Lambda code downloads and Cognito user lists are never needed for a plan.
+  # Table items, secret values, log contents and Cognito user listings are never needed for a plan.
+  # (cognito-idp:AdminGetUser stays allowed: Terraform refreshes the demo users with it; it returns
+  # profile attributes, never passwords.)
   statement {
     sid    = "DenyDataReads"
     effect = "Deny"
@@ -134,7 +136,6 @@ data "aws_iam_policy_document" "plan" {
       "ssm:GetParameter*",
       "kms:Decrypt",
       "cognito-idp:ListUsers",
-      "cognito-idp:AdminGetUser",
       "logs:GetLogEvents",
       "logs:FilterLogEvents",
       "logs:StartQuery",

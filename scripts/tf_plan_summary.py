@@ -23,6 +23,7 @@ Step by step
 Key terms
     Address: Terraform's name for a resource, e.g. module.data.aws_dynamodb_table.orders.
     Replace: delete + create (Terraform shows it as ["delete", "create"] or ["create", "delete"]).
+    Re-run: a replaced terraform_data helper (for example the Gateway sync); nothing in AWS is replaced.
 """
 
 from __future__ import annotations
@@ -33,7 +34,11 @@ import json
 import sys
 from typing import Any
 
-SYMBOL = {"create": "+", "update": "~", "replace": "-/+", "delete": "-"}
+SYMBOL = {"create": "+", "update": "~", "replace": "-/+", "rerun": "↻", "delete": "-"}
+
+# terraform_data resources are helper steps (gateway sync, seeding, log groups), not AWS resources.
+# Their "replace" just means "run the step again", so it isn't a reason to warn.
+HELPER_TYPES = ("terraform_data",)
 
 
 def action_of(actions: list[str]) -> str:
@@ -50,6 +55,8 @@ def changes(plan: dict[str, Any]) -> list[tuple[str, str]]:
     out = []
     for rc in plan.get("resource_changes", []):
         act = action_of(rc.get("change", {}).get("actions", []))
+        if act == "replace" and rc.get("type") in HELPER_TYPES:
+            act = "rerun"
         if act not in ("no-op", "read"):
             out.append((rc["address"], act))
     return sorted(out)
@@ -62,10 +69,11 @@ def summary_hash(items: list[tuple[str, str]]) -> str:
 
 def markdown(items: list[tuple[str, str]], title: str) -> str:
     """Step 4: the human-readable summary."""
-    counts = {k: sum(1 for _, a in items if a == k) for k in ("create", "update", "replace", "delete")}
+    counts = {k: sum(1 for _, a in items if a == k) for k in ("create", "update", "replace", "rerun", "delete")}
     lines = [f"### {title}", "",
              f"**{counts['create']} to add, {counts['update']} to change, {counts['replace']} to replace, "
-             f"{counts['delete']} to destroy** (addresses only; values are never shown in this public log)", ""]
+             f"{counts['delete']} to destroy**, {counts['rerun']} helper step(s) re-run "
+             "(addresses only; values are never shown in this public log)", ""]
     if counts["replace"] or counts["delete"]:
         lines += ["> ⚠️ This plan replaces or destroys resources. Check the list before approving.", ""]
     if items:
