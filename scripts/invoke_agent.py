@@ -254,6 +254,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--prompt", help="send one prompt and exit")
     parser.add_argument("--user", default="alice", help="demo user from .deploy/<env>/users.json (default alice)")
+    parser.add_argument("--login", nargs="?", const="EntraID", choices=["EntraID", "COGNITO"],
+                        help="sign in in the browser instead of with a demo password (default EntraID; "
+                             "COGNITO = the Cognito sign-in page)")
     parser.add_argument("--sigv4", action="store_true", help="use SigV4 (boto3) instead of a user token")
     parser.add_argument("--arn", help="agent runtime ARN (default: .deploy/<env>/outputs.json)")
     parser.add_argument("--region", help="AWS region (default: .deploy/<env>/outputs.json)")
@@ -270,11 +273,21 @@ def main() -> int:
     region = args.region or outputs["region"]
     outputs.setdefault("region", region)
     # Step 2: pick the conversation (session) to use for this user.
-    who = "sigv4" if args.sigv4 else args.user
+    who = "sigv4" if args.sigv4 else (f"login-{args.login.lower()}" if args.login else args.user)
     session_id = session_id_for(who, new=args.new_session)
 
     # Step 3: sign in once at the start (no token in SigV4 mode).
-    token = None if args.sigv4 else token_for_user(args.user, outputs)
+    if args.sigv4:
+        token = None
+    elif args.login:
+        # Browser sign-in (authorization code + PKCE) on Cognito's page, e.g. with Entra ID.
+        from oidc_login import browser_login
+
+        if not outputs.get("cognito_domain_url"):
+            raise SystemExit("outputs.json has no cognito_domain_url: deploy the current stack first.")
+        token = browser_login(outputs, port=8791, idp=None if args.login == "COGNITO" else args.login)
+    else:
+        token = token_for_user(args.user, outputs)
     url = runtime_url(region, arn)
 
     def send(prompt: str) -> None:

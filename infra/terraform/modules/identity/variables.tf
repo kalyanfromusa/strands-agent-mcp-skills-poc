@@ -41,3 +41,56 @@ variable "demo_users" {
     carol = ""
   }
 }
+
+# ---------------------------------------------------------------- Entra ID federation (P7)
+# Off by default: with enable_entra = false the pool, clients and tokens behave as before, plus the
+# browser sign-in (code + PKCE) for Cognito users.
+
+variable "enable_entra" {
+  description = "Add Entra ID as a federated identity provider (with the role mapper trigger)."
+  type        = bool
+  default     = false
+}
+
+variable "entra_tenant_id" {
+  description = "Entra tenant (directory) id, a GUID. Not secret."
+  type        = string
+  default     = ""
+}
+
+variable "entra_client_id" {
+  description = "Application (client) id of the Entra app registration ShopAssist-<Env>. Not secret."
+  type        = string
+  default     = ""
+}
+
+variable "entra_client_secret" {
+  description = "Client secret of that app registration (GitHub environment secret TF_VAR_ENTRA_CLIENT_SECRET)."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "role_mapper_arn" {
+  description = "ARN of the role-mapper Lambda (pre-token-generation trigger); empty when Entra is off."
+  type        = string
+  default     = ""
+}
+
+variable "trigger_version" {
+  description = "Pre-token-generation trigger version: V1_0 (free tier) or V2_0 (needs the Essentials tier)."
+  type        = string
+  default     = "V1_0"
+}
+
+variable "callback_urls" {
+  description = "Where Cognito may send the user back after browser sign-in (loopback addresses only)."
+  type        = list(string)
+  default     = ["http://localhost:8790/callback", "http://localhost:8791/callback"]
+}
+
+variable "logout_urls" {
+  description = "Where Cognito may send the user after sign-out."
+  type        = list(string)
+  default     = ["http://localhost:8790/", "http://localhost:8791/"]
+}

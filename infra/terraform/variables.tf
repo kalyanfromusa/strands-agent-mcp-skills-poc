@@ -114,3 +114,79 @@ variable "seed_data" {
   type        = bool
   default     = true
 }
+
+# ---------------------------------------------------------------- Entra ID federation (P7)
+# docs/12-entra-federation.md. Off by default; turn it on per environment in envs/<env>.tfvars once the
+# Entra app registration exists. The client secret never goes in a file: the GitHub environment secret
+# TF_VAR_ENTRA_CLIENT_SECRET is passed by deploy.yml as TF_VAR_entra_client_secret.
+
+variable "enable_entra" {
+  description = "Let users sign in with Entra ID (Cognito OIDC identity provider + role mapper)."
+  type        = bool
+  default     = false
+}
+
+variable "entra_tenant_id" {
+  description = "Entra tenant id (GUID). Required when enable_entra = true."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = !var.enable_entra || can(regex("^[0-9a-fA-F-]{36}$", var.entra_tenant_id))
+    error_message = "Set entra_tenant_id (a GUID) when enable_entra = true."
+  }
+}
+
+variable "entra_client_id" {
+  description = "Application (client) id of the Entra app registration (GUID). Required when enable_entra = true."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = !var.enable_entra || can(regex("^[0-9a-fA-F-]{36}$", var.entra_client_id))
+    error_message = "Set entra_client_id (a GUID) when enable_entra = true."
+  }
+}
+
+variable "entra_client_secret" {
+  description = "Client secret of the Entra app registration. From the GitHub environment secret, never from a file."
+  type        = string
+  default     = ""
+  sensitive   = true
+
+  validation {
+    condition     = !var.enable_entra || length(var.entra_client_secret) > 0
+    error_message = "entra_client_secret is empty: set the GitHub prod environment secret TF_VAR_ENTRA_CLIENT_SECRET."
+  }
+}
+
+variable "entra_role_source" {
+  description = "roles = Entra app roles (needs P1/P2); groups = group object ids (Entra Free fallback)."
+  type        = string
+  default     = "roles"
+
+  validation {
+    condition     = contains(["roles", "groups"], var.entra_role_source)
+    error_message = "entra_role_source must be \"roles\" or \"groups\"."
+  }
+}
+
+variable "entra_role_map" {
+  description = "Entra value (app role value, or group object id in groups mode) => ShopAssist Cognito group."
+  type        = map(string)
+  default = {
+    "AppRole-ShopAssist-Admin"  = "Group-ShopAssist-Admin"
+    "AppRole-ShopAssist-Viewer" = "Group-ShopAssist-Viewer"
+  }
+
+  validation {
+    condition     = alltrue([for g in values(var.entra_role_map) : contains(["Group-ShopAssist-Admin", "Group-ShopAssist-Viewer"], g)])
+    error_message = "entra_role_map values must be Group-ShopAssist-Admin or Group-ShopAssist-Viewer."
+  }
+}
+
+variable "entra_trigger_version" {
+  description = "Cognito pre-token-generation trigger version (V1_0 works on the free tier)."
+  type        = string
+  default     = "V1_0"
+}

@@ -5,6 +5,7 @@
 #   scripts/ci_image_checks.sh agent         <image ref>
 #   scripts/ci_image_checks.sh support_mcp   <image ref>
 #   scripts/ci_image_checks.sh orders_lambda <image ref>
+#   scripts/ci_image_checks.sh role_mapper   <image ref>
 #
 # What this file does
 #   Runs one container image locally on the CI runner (no AWS access, in-memory demo data) and calls it
@@ -95,7 +96,19 @@ case "${kind}" in
     echo "OK orders_lambda: get_order 1042 -> $(cut -c1-120 <<<"${out}")"
     ;;
 
+  role_mapper)
+    docker run -d --name "${name}" -p 19001:8080 \
+      -e ENTRA_PROVIDER_NAME=EntraID -e ENTRA_ROLE_SOURCE=roles \
+      -e 'ENTRA_ROLE_MAP={"AppRole-ShopAssist-Admin":"Group-ShopAssist-Admin"}' "${image}" >/dev/null
+    url=http://127.0.0.1:19001/2015-03-31/functions/function/invocations
+    wait_for curl -fsS -d '{}' "${url}" || fail "the Lambda emulator did not start"
+    ev='{"version":"1","triggerSource":"TokenGeneration_HostedAuth","request":{"userAttributes":{"sub":"u1","identities":"[{\"providerName\":\"EntraID\"}]","custom:entra_roles":"[\"AppRole-ShopAssist-Admin\"]"}},"response":{}}'
+    out="$(curl -fsS -d "${ev}" "${url}")"
+    grep -q '"groupsToOverride": *\["Group-ShopAssist-Admin"\]' <<<"${out}" || fail "role mapping returned: ${out}"
+    echo "OK role_mapper: AppRole-ShopAssist-Admin -> Group-ShopAssist-Admin"
+    ;;
+
   *)
-    fail "unknown image kind (agent | support_mcp | orders_lambda)"
+    fail "unknown image kind (agent | support_mcp | orders_lambda | role_mapper)"
     ;;
 esac

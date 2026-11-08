@@ -1,0 +1,4 @@
+# Ignore file for identity/role_mapper/Dockerfile (BuildKit picks up <Dockerfile>.dockerignore).
+# The build context is the repo root, so allow-list only what the image needs.
+*
+!identity/role_mapper/handler.py

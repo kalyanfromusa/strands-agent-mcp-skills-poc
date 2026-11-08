@@ -126,6 +126,9 @@ jobs:
       hash: ${{ steps.plan.outputs.hash }}
     env:
       IMAGE_TAG: ${{ needs.prepare.outputs.sha }}
+      # No environment secrets in this job. A placeholder keeps the plan valid when Entra is on; the
+      # approved job re-plans with the real secret (same addresses and actions, so the hash matches).
+      TF_VAR_entra_client_secret: placeholder-not-used-for-apply
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -168,6 +171,9 @@ jobs:
     env:
       IMAGE_TAG: ${{ needs.prepare.outputs.sha }}
       APPROVED_HASH: ${{ needs.plan.outputs.hash }}
+      # Entra client secret (GitHub environment secret; empty while Entra is off). Terraform marks it
+      # sensitive, and our logs only ever show plan summaries.
+      TF_VAR_entra_client_secret: ${{ secrets.TF_VAR_ENTRA_CLIENT_SECRET }}
     steps:
       # Terraform code and scripts from the commit this run is on (main) ...
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -201,7 +207,7 @@ jobs:
       - name: Find missing images
         id: missing
         run: |
-          for kind in agent support_mcp orders_lambda; do
+          for kind in agent support_mcp orders_lambda role_mapper; do
             repo="shopassist-${kind//_/-}"
             if aws ecr describe-images --repository-name "$repo" --image-ids "imageTag=${IMAGE_TAG}" >/dev/null 2>&1; then
               echo "$kind=false" >> "$GITHUB_OUTPUT"; echo "$repo:${IMAGE_TAG:0:12} already in ECR"
@@ -223,15 +229,21 @@ jobs:
         uses: ./.github/actions/build-image
         with: { kind: orders_lambda, dockerfile: mcp_servers/orders_lambda/Dockerfile, tag: "${{ env.IMAGE_TAG }}", source: src }
 
+      - name: Build role_mapper
+        if: steps.missing.outputs.role_mapper == 'true'
+        uses: ./.github/actions/build-image
+        with: { kind: role_mapper, dockerfile: identity/role_mapper/Dockerfile, tag: "${{ env.IMAGE_TAG }}", source: src }
+
       - name: Push the new images
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           NEED_AGENT: ${{ steps.missing.outputs.agent }}
           NEED_SUPPORT: ${{ steps.missing.outputs.support_mcp }}
           NEED_ORDERS: ${{ steps.missing.outputs.orders_lambda }}
+          NEED_MAPPER: ${{ steps.missing.outputs.role_mapper }}
         run: |
           pushed=""
-          for pair in "agent:$NEED_AGENT" "support_mcp:$NEED_SUPPORT" "orders_lambda:$NEED_ORDERS"; do
+          for pair in "agent:$NEED_AGENT" "support_mcp:$NEED_SUPPORT" "orders_lambda:$NEED_ORDERS" "role_mapper:$NEED_MAPPER"; do
             kind="${pair%%:*}"; need="${pair##*:}"
             [ "$need" = "true" ] || continue
             repo="shopassist-${kind//_/-}"

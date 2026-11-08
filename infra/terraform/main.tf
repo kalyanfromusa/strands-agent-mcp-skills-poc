@@ -128,13 +128,36 @@ module "data" {
 # so the Gateway can get its own token when it calls the support server. This module needs nothing
 # from the other modules, so Terraform builds it in parallel with module "data".
 # Cognito (the OAuth2 authorization server) + AgentCore Identity credential provider.
+# Step 3a (only with enable_entra): the Lambda that turns Entra app roles into ShopAssist groups
+# while Cognito issues tokens (identity/role_mapper/handler.py).
+module "role_mapper" {
+  source = "./modules/role_mapper"
+  count  = var.enable_entra ? 1 : 0
+
+  name_prefix              = local.name
+  image_uri                = local.images["role_mapper"]
+  permissions_boundary_arn = local.boundary
+  log_retention_days       = var.log_retention_days
+  provider_name            = "EntraID"
+  role_source              = var.entra_role_source
+  role_map                 = var.entra_role_map
+}
+
 module "identity" {
   source = "./modules/identity"
 
   name_prefix    = local.name
   api_identifier = var.name_prefix
-  region         = var.region
-  account_id     = local.account_id
+
+  # Entra ID federation (docs/12-entra-federation.md); all of it is skipped when enable_entra = false.
+  enable_entra        = var.enable_entra
+  entra_tenant_id     = var.entra_tenant_id
+  entra_client_id     = var.entra_client_id
+  entra_client_secret = var.entra_client_secret
+  role_mapper_arn     = var.enable_entra ? module.role_mapper[0].function_arn : ""
+  trigger_version     = var.entra_trigger_version
+  region              = var.region
+  account_id          = local.account_id
 }
 
 # Step 4: the `orders` tools (get_order, list_customer_orders, check_return_eligibility,
@@ -306,6 +329,8 @@ locals {
     cognito_token_url       = module.identity.token_url
     oauth_provider_name     = module.identity.oauth_provider_name
     cognito_users_client_id = module.identity.users_client_id
+    cognito_domain_url      = module.identity.domain_url
+    entra_enabled           = var.enable_entra
     policy_engine_id        = module.gateway.policy_engine_id
     deployed_by             = "terraform"
   }
