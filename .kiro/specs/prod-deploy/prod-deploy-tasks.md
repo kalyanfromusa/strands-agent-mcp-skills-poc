@@ -143,20 +143,20 @@ Nothing goes in git: secrets, `.deploy/`, `*.tfstate*`, `tfplan`, `dist/`, Entra
 - [ ] 6b.6 🧪 (when the demo is over) `destroy_everything.sh` → `leftovers.py --all` CLEAN
 
 ## P7. Entra ID federation (cloud-only groups, app roles)
-- [ ] 7.1 Write `docs/12-entra-federation.md` runbook part 1 (tenant, P2 trial, app registration `ShopAssist-Prod`,
+- [x] 7.1 Write `docs/12-entra-federation.md` runbook part 1 (tenant, P2 trial, app registration `ShopAssist-Prod`,
       app roles `AppRole-ShopAssist-Admin` / `-Viewer`, groups `AD-ShopAssist-Prod-Admins` / `-Viewers`, test users
       for admin/viewer/none, assignment required, client secret, token configuration)
 - [ ] 7.2 👤 Do the Entra steps; give Claude the tenant id, client id and group/role names (the secret goes only to the
       GitHub environment secret and a local git-ignored tfvars)
-- [ ] 7.2b Custom sign-in domain `strands-agents-poc.nalamone.com`: an ACM certificate in us-east-1 (DNS validation CNAME added
+- [ ] 7.2b *(deferred 2026-11-08: keep the Cognito domain for now)* Custom sign-in domain `strands-agents-poc.nalamone.com`: an ACM certificate in us-east-1 (DNS validation CNAME added
       in Cloudflare by 👤 you), Cognito custom domain, and a CNAME in Cloudflare to Cognito's CloudFront endpoint (DNS only,
       not proxied). Note: Cognito requires the parent domain `nalamone.com` to have an A record
-- [ ] 7.3 Terraform: Cognito OIDC IdP `EntraID`, custom attribute `custom:entra_roles`, users client with auth-code +
-      PKCE, `COGNITO` + `EntraID`, loopback callbacks, access token 15 min / refresh 8 h
-- [ ] 7.4 Role-mapper Lambda (container image, 4th ECR repo or a shared one): `entra_role_source`, `entra_role_map`,
-      allow-list, fail-closed, highest role wins, logs decisions without tokens; unit tests
+- [x] 7.3 Terraform: Cognito OIDC IdP `EntraID`, custom attribute `custom:entra_roles`, users client with auth-code +
+      PKCE, `COGNITO` + `EntraID`, loopback callbacks, access token 15 min / refresh 8 h *(2026-11-08: coded, off by default; a plan with Entra on = 59 to add)*
+- [x] 7.4 Role-mapper Lambda (container image, 4th ECR repo or a shared one): `entra_role_source`, `entra_role_map`,
+      allow-list, fail-closed, highest role wins, logs decisions without tokens; unit tests *(2026-11-08: `identity/role_mapper/` + `modules/role_mapper`; 11 unit tests; 4th image in CI with an RIE check)*
 - [ ] 7.5 🧪 Verify `groupOverrideDetails` (V1) reaches the **access** token. If not, switch to V2 and note the Essentials cost
-- [ ] 7.6 `invoke_agent.py --login` and the chat UI "Sign in" button (PKCE, loopback, state + nonce checks); tests
+- [x] 7.6 `invoke_agent.py --login` and the chat UI "Sign in" button (PKCE, loopback, state + nonce checks); tests *(2026-11-08: `scripts/oidc_login.py` + 5 tests; chat UI routes checked locally: /login → Cognito authorize, bad state refused, one-time claim)*
 - [ ] 7.7 🔑 Deploy via `deploy.yml` (👤 approve)
 - [ ] 7.8 🧪 Demo e1 (admin → all tools), e2 (viewer → read-only), e3 (no group → blocked); alice/bob/carol unchanged
 - [ ] 7.9 🧪 Revocation: move the e1 user to Viewers → after re-sign-in `create_return` is gone

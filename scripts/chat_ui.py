@@ -20,6 +20,9 @@ token there, so the page offers dummy tokens; the role comes from `local_gateway
 #     GET  /             the chat page (scripts/chat_ui.html)
 #     GET  /api/config   non-secret deployment info for the page (region, runtime ARN, users client id)
 #     POST /api/invoke   {"token", "session_id", "prompt"} -> POST to the Runtime -> {"status", "result"}
+#     GET  /login?idp=…  start a browser sign-in (code + PKCE) on Cognito's page (EntraID or COGNITO)
+#     GET  /callback     Cognito's redirect back; exchanges the code, then hands the token to the page
+#     POST /api/claim    {"id"} -> the signed-in token, exactly once (scripts/oidc_login.py)
 #
 # Security choices
 #   - Listens on 127.0.0.1 only, and rejects requests whose Host header isn't this server (guards
@@ -34,8 +37,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import secrets
 import sys
+import threading
 import time
+import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -70,6 +76,13 @@ class Handler(BaseHTTPRequestHandler):
     config: dict[str, Any] = {}
     allowed_hosts: set[str] = set()
     timeout: float = 300.0
+    outputs: dict[str, Any] = {}
+    port: int = 8790
+    # Sign-ins in progress (state -> PendingLogin) and finished ones waiting for the page (id -> token).
+    # Kept in memory only, each used once; the token never appears in a URL or a log.
+    pending: dict[str, Any] = {}
+    claims: dict[str, str] = {}
+    lock = threading.Lock()
 
     # -- helpers ------------------------------------------------------------------------------
     def _send(self, status: int, body: bytes, content_type: str) -> None:
@@ -82,6 +95,14 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", CSP)
         self.end_headers()
         self.wfile.write(body)
+
+    def _redirect(self, location: str) -> None:
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _json(self, status: int, data: dict[str, Any]) -> None:
         self._send(status, json.dumps(data).encode("utf-8"), "application/json; charset=utf-8")
@@ -98,7 +119,9 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def log_message(self, fmt: str, *args: Any) -> None:  # request line only; bodies (tokens) never logged
-        sys.stderr.write(f"{self.address_string()} {fmt % args}\n")
+        # The /callback query string holds the one-time code: log the path only.
+        line = (fmt % args).split("?", 1)[0]
+        sys.stderr.write(f"{self.address_string()} {line}\n")
 
     # -- routes -------------------------------------------------------------------------------
     def do_GET(self) -> None:  # noqa: N802
@@ -109,13 +132,61 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
         elif path == "/api/config":
             self._json(200, self.config)
+        elif path == "/login":
+            self._start_login()
+        elif path == "/callback":
+            self._finish_login()
         else:
             self._json(404, {"error": "not found"})
+
+    # -- browser sign-in ------------------------------------------------------------------------
+    def _start_login(self) -> None:
+        """Send the browser to Cognito's sign-in page (with Entra ID, or Cognito's own login)."""
+        from oidc_login import PendingLogin
+
+        if not self.outputs.get("cognito_domain_url"):
+            self._json(400, {"error": "sign-in needs a deployed stack (outputs.json with cognito_domain_url)"})
+            return
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        idp = query.get("idp", ["EntraID"])[0]
+        if idp not in ("EntraID", "COGNITO"):
+            self._json(400, {"error": "idp must be EntraID or COGNITO"})
+            return
+        login = PendingLogin(self.outputs, f"http://localhost:{self.port}/callback", None if idp == "COGNITO" else idp)
+        with self.lock:
+            self.pending[login.state] = login
+        self._redirect(login.url)
+
+    def _finish_login(self) -> None:
+        """Cognito's redirect: check state, exchange the code, park the token for the page (one use)."""
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        with self.lock:
+            login = self.pending.pop(query.get("state", [""])[0], None)
+        if login is None:
+            self._redirect("/#login_error=" + urllib.parse.quote("unknown or expired sign-in, try again"))
+            return
+        try:
+            tokens = login.finish(query)
+        except Exception as e:
+            self._redirect("/#login_error=" + urllib.parse.quote(str(e)[:200]))
+            return
+        claim_id = secrets.token_urlsafe(24)
+        with self.lock:
+            self.claims[claim_id] = tokens["access_token"]
+        self._redirect(f"/#login={claim_id}")
+
+    def _claim(self, req: dict[str, Any]) -> None:
+        with self.lock:
+            token = self.claims.pop(str(req.get("id", "")), None)
+        if token is None:
+            self._json(404, {"error": "nothing to claim (already used or expired)"})
+        else:
+            self._json(200, {"token": token})
 
     def do_POST(self) -> None:  # noqa: N802
         if not self._request_ok():
             return
-        if self.path != "/api/invoke":
+        if self.path not in ("/api/invoke", "/api/claim"):
             self._json(404, {"error": "not found"})
             return
         if "application/json" not in self.headers.get("Content-Type", ""):
@@ -132,6 +203,10 @@ class Handler(BaseHTTPRequestHandler):
             req = json.loads(self.rfile.read(length))
         except json.JSONDecodeError:
             self._json(400, {"error": "body is not JSON"})
+            return
+
+        if self.path == "/api/claim":
+            self._claim(req)
             return
 
         token = str(req.get("token", "")).strip()
@@ -214,6 +289,8 @@ def main() -> int:
     Handler.target_url = target
     Handler.timeout = args.timeout
     Handler.allowed_hosts = {f"127.0.0.1:{args.port}", f"localhost:{args.port}"}
+    Handler.outputs = outputs
+    Handler.port = args.port
     Handler.config = {
         "target": mode,
         "target_url": target,
@@ -221,10 +298,14 @@ def main() -> int:
         "agent_runtime_arn": outputs.get("agent_runtime_arn"),
         "cognito_users_client_id": outputs.get("cognito_users_client_id"),
         "deployed_by": outputs.get("deployed_by"),
+        # Browser sign-in works only on port 8790 (the callback address registered in Cognito).
+        "login_available": bool(outputs.get("cognito_domain_url")) and args.port == 8790,
+        "entra_enabled": bool(outputs.get("entra_enabled")),
     }
 
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    url = f"http://127.0.0.1:{args.port}/"
+    # localhost (not 127.0.0.1): it must match the sign-in callback address registered in Cognito.
+    url = f"http://localhost:{args.port}/"
     print(f"ShopAssist chat UI on {url}  ->  {target}")
     print("Ctrl+C to stop.")
     if args.open:

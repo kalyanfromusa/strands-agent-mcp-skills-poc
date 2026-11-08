@@ -47,7 +47,8 @@
 locals {
   domain        = "${var.name_prefix}-${var.account_id}"
   discovery_url = "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.this.id}/.well-known/openid-configuration"
-  token_url     = "https://${local.domain}.auth.${var.region}.amazoncognito.com/oauth2/token"
+  domain_url    = "https://${local.domain}.auth.${var.region}.amazoncognito.com"
+  token_url     = "${local.domain_url}/oauth2/token"
   groups        = toset(["Group-ShopAssist-Admin", "Group-ShopAssist-Viewer"])
 }
 
@@ -56,7 +57,8 @@ locals {
 resource "aws_cognito_user_pool" "this" {
   name = "${var.name_prefix}-pool"
 
-  # Demo users are created by Terraform with a permanent password; nobody signs up.
+  # Only an administrator (Terraform) can create Cognito users; Entra users are created by Cognito
+  # itself at their first federated sign-in.
   admin_create_user_config {
     allow_admin_create_user_only = true
   }
@@ -68,11 +70,44 @@ resource "aws_cognito_user_pool" "this" {
     require_numbers   = true
     require_symbols   = true
   }
+
+  # Where Cognito keeps what Entra says about a federated user (refreshed at every sign-in):
+  #   custom:entra_roles   the app roles (AppRole-ShopAssist-*), used in "roles" mode;
+  #   custom:entra_groups  the group object ids, used in the Entra-Free "groups" mode.
+  # Always defined (also with enable_entra = false), so switching Entra on later is an in-place change.
+  schema {
+    name                     = "entra_roles"
+    attribute_data_type      = "String"
+    mutable                  = true
+    developer_only_attribute = false
+    string_attribute_constraints {
+      min_length = 0
+      max_length = 2048
+    }
+  }
+  schema {
+    name                     = "entra_groups"
+    attribute_data_type      = "String"
+    mutable                  = true
+    developer_only_attribute = false
+    string_attribute_constraints {
+      min_length = 0
+      max_length = 2048
+    }
+  }
+
+  # The role mapper runs just before Cognito issues tokens (only when Entra is on).
+  dynamic "lambda_config" {
+    for_each = var.enable_entra ? [1] : []
+    content {
+      pre_token_generation_config {
+        lambda_arn     = var.role_mapper_arn
+        lambda_version = var.trigger_version
+      }
+    }
+  }
 }
 
-# Step 2: the pool's web domain, <prefix>-<account>.auth.<region>.amazoncognito.com.
-# The domain hosts /oauth2/token. It must exist before anything reads the discovery
-# document, because Cognito only advertises token_endpoint once a domain is set.
 resource "aws_cognito_user_pool_domain" "this" {
   domain       = local.domain
   user_pool_id = aws_cognito_user_pool.this.id
@@ -115,8 +150,78 @@ resource "aws_cognito_user_pool_client" "users" {
   name         = "${var.name_prefix}-users"
   user_pool_id = aws_cognito_user_pool.this.id
 
-  generate_secret     = false
+  # Public client (no secret): it's used from a browser and the CLI on the user's own machine.
+  generate_secret = false
+
+  # 1. Password sign-in for the Cognito demo users (scripts/invoke_agent.py --user alice).
   explicit_auth_flows = ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]
+
+  # 2. Browser sign-in through Cognito's managed login (authorization code + PKCE), offering the Cognito
+  #    users and, when enabled, "Sign in with Entra". The redirect goes back to the user's own machine
+  #    (loopback): the chat page (8790) or the CLI (8791).
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = ["openid", "email", "profile"]
+  callback_urls                        = var.callback_urls
+  logout_urls                          = var.logout_urls
+  supported_identity_providers         = var.enable_entra ? ["COGNITO", "EntraID"] : ["COGNITO"]
+
+  # Short-lived access tokens: removing someone from an AD group takes effect within 15 minutes
+  # (the next refresh re-runs the role mapper with what Entra says now).
+  access_token_validity  = 15
+  id_token_validity      = 15
+  refresh_token_validity = 8
+  token_validity_units {
+    access_token  = "minutes"
+    id_token      = "minutes"
+    refresh_token = "hours"
+  }
+
+  # Don't reveal whether a user name exists.
+  prevent_user_existence_errors = "ENABLED"
+
+  depends_on = [aws_cognito_identity_provider.entra]
+}
+
+# ---------------------------------------------------------------- Entra ID federation (enable_entra)
+
+# Entra ID as an OpenID Connect identity provider. Users choose "EntraID" on the sign-in page, sign in
+# at Microsoft, and come back with an ID token whose claims Cognito copies into the user's attributes.
+#   roles -> custom:entra_roles (app roles assigned through AD groups), email, name
+#   username = Entra's stable object id (sub), so a renamed user keeps the same Cognito profile.
+resource "aws_cognito_identity_provider" "entra" {
+  count = var.enable_entra ? 1 : 0
+
+  user_pool_id  = aws_cognito_user_pool.this.id
+  provider_name = "EntraID"
+  provider_type = "OIDC"
+
+  provider_details = {
+    client_id                 = var.entra_client_id
+    client_secret             = var.entra_client_secret
+    oidc_issuer               = "https://login.microsoftonline.com/${var.entra_tenant_id}/v2.0"
+    authorize_scopes          = "openid email profile"
+    attributes_request_method = "GET"
+  }
+
+  attribute_mapping = {
+    username              = "sub"
+    email                 = "email"
+    name                  = "name"
+    "custom:entra_roles"  = "roles"
+    "custom:entra_groups" = "groups"
+  }
+}
+
+# Let Cognito (only this user pool) invoke the role mapper.
+resource "aws_lambda_permission" "role_mapper" {
+  count = var.enable_entra ? 1 : 0
+
+  statement_id  = "AllowCognitoPreTokenGeneration"
+  action        = "lambda:InvokeFunction"
+  function_name = var.role_mapper_arn
+  principal     = "cognito-idp.amazonaws.com"
+  source_arn    = aws_cognito_user_pool.this.arn
 }
 
 # ---------------------------------------------------------------- Demo users & groups

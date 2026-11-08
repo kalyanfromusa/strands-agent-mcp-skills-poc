@@ -80,6 +80,8 @@ jobs:
             dockerfile: mcp_servers/support_mcp/Dockerfile
           - kind: orders_lambda
             dockerfile: mcp_servers/orders_lambda/Dockerfile
+          - kind: role_mapper
+            dockerfile: identity/role_mapper/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

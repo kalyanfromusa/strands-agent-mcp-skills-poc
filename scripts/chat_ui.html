@@ -101,6 +101,13 @@
         <button type="button" id="dummyViewer">Dummy token: bob (viewer)</button>
       </div>
     </div>
+    <div id="loginBox" hidden>
+      <div class="row">
+        <button type="button" id="loginEntra" class="primary" hidden>Sign in with Entra ID</button>
+        <button type="button" id="loginCognito">Sign in (Cognito page)</button>
+      </div>
+      <p class="note">Opens the sign-in page; after signing in you come back here with your token. Or paste a token below.</p>
+    </div>
     <label for="token">Cognito <em>access</em> token</label>
     <textarea id="token" rows="5" spellcheck="false" autocomplete="off" placeholder="eyJraWQiOi… (Bearer prefix optional)"></textarea>
     <div class="row">
@@ -486,6 +493,8 @@ function useDummyToken(user, group) {
 $("dummyAdmin").addEventListener("click", () => useDummyToken("alice", "Group-ShopAssist-Admin"));
 $("dummyViewer").addEventListener("click", () => useDummyToken("bob", "Group-ShopAssist-Viewer"));
 $("apply").addEventListener("click", applyToken);
+$("loginEntra").addEventListener("click", () => { location.href = "/login?idp=EntraID"; });
+$("loginCognito").addEventListener("click", () => { location.href = "/login?idp=COGNITO"; });
 $("clearTok").addEventListener("click", clearToken);
 $("newSession").addEventListener("click", () => resetSession("New session: the agent starts without memory of the previous conversation."));
 $("clearLog").addEventListener("click", () => $("log").replaceChildren());
@@ -507,11 +516,25 @@ $("prompt").addEventListener("keydown", (e) => {
     $("target").textContent = `→ ${cfg.target_url}` + (cfg.target === "local" ? "  (local agent)" : "")
       + (cfg.deployed_by ? `  (deployed by ${cfg.deployed_by})` : "");
     $("localBox").hidden = cfg.target !== "local";
+    $("loginBox").hidden = !cfg.login_available;
+    $("loginEntra").hidden = !cfg.entra_enabled;
     if (cfg.region && cfg.cognito_users_client_id) {
       $("cliCmd").textContent = `aws cognito-idp initiate-auth --region ${cfg.region} --auth-flow USER_PASSWORD_AUTH --client-id ${cfg.cognito_users_client_id} --auth-parameters USERNAME=alice,PASSWORD=<password> --query AuthenticationResult.AccessToken --output text`;
     }
   } catch {
     $("target").textContent = "couldn't load /api/config: open this page through scripts/chat_ui.py";
+  }
+  // Back from a browser sign-in: fetch the token once (the URL only carries a one-time id), then forget it.
+  const back = new URLSearchParams(location.hash.slice(1));
+  history.replaceState(null, "", location.pathname);
+  if (back.get("login_error")) setBanner("warn", "Sign-in failed: " + back.get("login_error"));
+  if (back.get("login")) {
+    try {
+      const r = await fetch("/api/claim", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: back.get("login") }) });
+      const data = await r.json();
+      if (data.token) { $("token").value = data.token; applyToken(); }
+      else setBanner("warn", "Sign-in: " + (data.error || "no token"));
+    } catch { setBanner("warn", "Sign-in: couldn't fetch the token"); }
   }
   updateChrome();
 })();

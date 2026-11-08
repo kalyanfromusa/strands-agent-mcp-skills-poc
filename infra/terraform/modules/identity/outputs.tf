@@ -64,3 +64,6 @@ output "demo_users" {
   # Only hand out credentials once the group memberships exist.
   depends_on = [aws_cognito_user_in_group.this]
 }
+
+# The managed-login address (sign-in page, /oauth2/authorize, /oauth2/token) used by the browser sign-in.
+output "domain_url" { value = local.domain_url }
