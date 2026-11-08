@@ -2,8 +2,10 @@
 # main.tf (Terraform root module): the "table of contents" of the ShopAssist deployment
 #
 # What this file does
-#   Wires the six building blocks (modules) of ShopAssist together, adds an optional cost alert, and
-#   writes two small files into .deploy/ that the command-line scripts read to talk to the deployment.
+#   Wires the building blocks (modules) of ShopAssist together: six always, plus a seventh
+#   (role_mapper) only when Entra ID sign-in is switched on. It also re-syncs the Gateway's support
+#   target after an image change, adds an optional cost alert, and writes two small files into
+#   .deploy/<env>/ that the command-line scripts read to talk to the deployment.
 #
 # Where it fits
 #   One copy of this stack per environment (dev, prod), each with its own state file in S3:
@@ -19,8 +21,8 @@
 #   which resource uses a value from which other resource (for example `module.data.orders_table_arn`),
 #   and builds a dependency graph from that. It then creates resources in graph order, running
 #   independent ones in parallel. `depends_on` adds an ordering rule where no value is passed. The
-#   state file (terraform.tfstate, git-ignored) records what was created, so the next `apply` only
-#   changes what differs, and `terraform destroy` removes everything in reverse order.
+#   state file (main/<env>.tfstate in the S3 state bucket) records what was created, so the next
+#   `apply` only changes what differs, and `terraform destroy` removes everything in reverse order.
 #
 # How the modules feed each other (an arrow means "outputs of A are inputs of B")
 #
@@ -29,15 +31,19 @@
 #     |-- tickets table + image -------------> mcp_runtime (support server) --+ |
 #     |                                                                        | | Lambda ARN,
 #     |                                                                        v v runtime ARN
+#   role_mapper (only with enable_entra) -- Lambda ARN --> identity
 #   identity (Cognito, demo users, OAuth provider) -- login settings -------> gateway
 #     |                                                  (MCP endpoint + Cedar policies)
 #     |                                                                        |
 #     |                                                                        | gateway URL
 #     |                                                                        v
 #     +-- login settings, users client id --------------------------------> agent_runtime
-#   data -- skills location (+ agent image) ----------------------------------> (Strands agent)
+#   data -- skills location ------------------------------------------------> (Strands agent)
 #
-#   All of the above --> .deploy/outputs.json and .deploy/users.json (files on your computer)
+#   Every workload module also gets its container image (<ECR repository>:<image_tag>) and the
+#   permissions boundary from the platform stack.
+#   All of the above --> .deploy/<env>/outputs.json and .deploy/<env>/users.json (files on the
+#   computer that runs Terraform)
 #
 # Step by step (the order Terraform ends up following)
 #   1. Look up the AWS account id, read the platform stack's outputs, and build the image URIs
@@ -46,9 +52,12 @@
 #      (optionally) fill the orders table with demo data.
 #   3. module.identity: create the Cognito user pool, app clients, demo users alice/bob/carol and
 #      the AgentCore Identity OAuth2 credential provider. (Runs in parallel with step 2.)
+#      3a. Only with enable_entra: module.role_mapper first creates the Lambda that turns Entra roles
+#          into ShopAssist groups, and module.identity adds Entra as a sign-in option.
 #   4. module.lambda_tools: create the `orders` tools Lambda function from its container image.
 #   5. module.mcp_runtime: start the `support` tools server on AgentCore Runtime.
 #   6. module.gateway: create the policy engine, the Gateway, its two targets and the Cedar policies.
+#      6b. Ask the Gateway to re-read the support server's tool list (scripts/sync_gateway_target.py).
 #   7. module.agent_runtime: start the Strands agent on AgentCore Runtime, pointed at the Gateway.
 #   8. Optionally create a monthly AWS Budget alert.
 #   9. Write .deploy/<env>/outputs.json and .deploy/<env>/users.json for the CLI scripts.
@@ -67,6 +76,9 @@
 #   Runtime: AgentCore Runtime, the AWS service that runs our Python code (the agent or a tool server).
 #   Cognito: the AWS login service; it issues the tokens that prove who a user is.
 #   JWT (JSON Web Token): a signed login token that says who the user is and which groups they are in.
+#   ECR (Elastic Container Registry): AWS's private store for container images (created by platform).
+#   Permissions boundary: a ceiling on what an IAM (Identity and Access Management) role may do,
+#     whatever permissions are attached to it. Every role this stack creates must carry one.
 # =====================================================================================================
 
 # Step 1: ask AWS "which account am I deployed into?". The account id is used in globally unique names
@@ -74,7 +86,8 @@
 data "aws_caller_identity" "current" {}
 
 # Step 1b: read the platform stack's outputs (ECR repository URLs, permissions boundaries) from its
-# state file in the S3 state bucket. Read-only: this stack never changes the platform.
+# state file in the S3 state bucket. Read-only: this stack never changes the platform. The bucket name
+# is rebuilt from the same pattern the bootstrap stack used (<prefix>-tfstate-<account>-<region>).
 data "terraform_remote_state" "platform" {
   backend = "s3"
   config = {
@@ -85,10 +98,17 @@ data "terraform_remote_state" "platform" {
 }
 
 # Values computed once and reused below.
+#   account_id:  the AWS account number from step 1.
 #   name:        the environment's name prefix, e.g. shopassist-prod. Every resource name starts with it.
-#   repo_root:   the repository folder, two levels up from infra/terraform.
-#   images:      the container image of each workload, <ECR repository URL>:<image_tag>.
-#   ecr_arns:    the ECR repository ARNs (each workload role may pull only its own image).
+#   repo_root:   the repository folder, two levels up from infra/terraform (scripts run from there).
+#   platform:    shorthand for the platform stack's outputs (step 1b).
+#   images:      the container image of each workload, <ECR repository URL>:<image_tag>, keyed
+#                agent / support_mcp / orders_lambda / role_mapper.
+#   ecr_arns:    the ECR repository ARNs, rebuilt from the repository URLs (the part after the "/" is
+#                the repository name). The two runtime roles use them so each may pull only its own
+#                image. Lambda pulls its image through a permission on the ECR repository itself
+#                (a repository policy AWS adds when the function is created), so the Lambda modules
+#                don't need one.
 #   boundary:    the permissions boundary every IAM role of this environment must carry.
 #   oauth_scope: the permission name ("shopassist/invoke") written into machine tokens. The Gateway asks
 #                for it when it calls the support server.
@@ -123,13 +143,9 @@ module "data" {
   seed_data   = var.seed_data
 }
 
-# Step 3: logins. Cognito issues login tokens for the demo users (alice, bob, carol) and for the
-# machine-to-machine (M2M) client. The AgentCore Identity credential provider stores the M2M secret
-# so the Gateway can get its own token when it calls the support server. This module needs nothing
-# from the other modules, so Terraform builds it in parallel with module "data".
-# Cognito (the OAuth2 authorization server) + AgentCore Identity credential provider.
-# Step 3a (only with enable_entra): the Lambda that turns Entra app roles into ShopAssist groups
-# while Cognito issues tokens (identity/role_mapper/handler.py).
+# Step 3a (only with enable_entra): the Lambda that turns Entra app roles (or groups) into ShopAssist
+# Cognito groups while Cognito issues tokens (identity/role_mapper/handler.py). `count` = 0 means the
+# module is not created at all; with count = 1 it is addressed as module.role_mapper[0].
 module "role_mapper" {
   source = "./modules/role_mapper"
   count  = var.enable_entra ? 1 : 0
@@ -143,6 +159,12 @@ module "role_mapper" {
   role_map                 = var.entra_role_map
 }
 
+# Step 3: logins. Cognito (the OAuth2 authorization server) issues login tokens for the demo users
+# (alice, bob, carol), for Entra users when enabled, and for the machine-to-machine (M2M) client. The
+# AgentCore Identity credential provider stores the M2M secret so the Gateway can get its own token
+# when it calls the support server. Apart from the optional role mapper, this module needs nothing
+# from the other modules, so Terraform builds it in parallel with module "data".
+# api_identifier is the bare prefix ("shopassist"), so the scope is shopassist/invoke in every env.
 module "identity" {
   source = "./modules/identity"
 
@@ -162,8 +184,7 @@ module "identity" {
 
 # Step 4: the `orders` tools (get_order, list_customer_orders, check_return_eligibility,
 # create_return) as an AWS Lambda function from its container image. It needs the orders/returns
-# table names from module "data", so Terraform waits for that module first.
-# `orders` tools as a Lambda behind the Gateway.
+# table names from module "data", so Terraform waits for that module first. The Gateway calls it.
 module "lambda_tools" {
   source = "./modules/lambda_tools"
 
@@ -180,7 +201,6 @@ module "lambda_tools" {
 # Step 5: the `support` tools (create_ticket, get_ticket, search_faq) as a FastMCP server running on
 # AgentCore Runtime, from its container image. It needs the tickets table (module "data") and the Cognito details
 # (module "identity"), because it only accepts calls that carry a token from the M2M client.
-# `support` tools as a FastMCP server on AgentCore Runtime (protocol MCP).
 module "mcp_runtime" {
   source = "./modules/mcp_runtime"
 
@@ -202,8 +222,9 @@ module "mcp_runtime" {
 # step 4, the support server from step 5 and the Cognito and credential-provider details from step 3.
 # It also loads the Cedar policy files from infra/policies, which decide which user may see and call
 # which tool. Because it uses outputs from three modules, Terraform creates it after all of them.
-# Single MCP endpoint for the agent: targets `orders` (Lambda) and `support` (MCP
-# runtime), guarded by a JWT authorizer and a Cedar policy engine (design.md section 8).
+# Today it has exactly two targets, `orders` (Lambda) and `support` (MCP runtime), guarded by a JWT
+# authorizer and a Cedar policy engine (design.md section 8). A third target `onprem` (the simulated
+# on-prem warehouse API) is planned but not built.
 module "gateway" {
   source = "./modules/gateway"
 
@@ -230,8 +251,11 @@ module "gateway" {
 
 # Step 6b: when the support server gets a new image, its tool list may have changed, so ask the Gateway
 # to re-read it (scripts/sync_gateway_target.py waits until the target is READY again). It runs once at
-# creation (harmless) and again whenever the support image tag changes, as part of `terraform apply`.
-# The command has no quotes, env syntax or pipes, so it works under cmd.exe and /bin/sh alike.
+# creation (harmless), and again whenever the support image tag or the Gateway id changes
+# (triggers_replace), as part of `terraform apply`. The orders target needs no sync: its tool list
+# comes from tools_schema.json in Terraform itself. terraform_data is an empty placeholder resource
+# that exists only to run this command. The command has no quotes, env syntax or pipes, so it works
+# under cmd.exe and /bin/sh alike.
 resource "terraform_data" "sync_gateway_targets" {
   triggers_replace = {
     support_image = local.images["support_mcp"]
@@ -248,9 +272,9 @@ resource "terraform_data" "sync_gateway_targets" {
 
 # Step 7: the ShopAssist agent itself, running on AgentCore Runtime. It is created last because it
 # needs the Gateway URL (step 6) to find its tools, and the skills location (step 2) to load its
-# procedures. Only users in the Group-ShopAssist-Admin or Group-ShopAssist-Viewer Cognito group may call it, so carol (no
-# group) is turned away before any agent code runs.
-# The generic Strands agent (protocol HTTP), invoked with a Cognito user token.
+# procedures. It is the generic Strands agent (protocol HTTP), invoked with a Cognito user token from
+# the users client. Only users in the Group-ShopAssist-Admin or Group-ShopAssist-Viewer Cognito group
+# may call it, so carol (no group) is turned away before any agent code runs.
 module "agent_runtime" {
   source = "./modules/agent_runtime"
 
@@ -278,9 +302,10 @@ module "agent_runtime" {
 
 # Step 8 (optional): a monthly AWS Budget that emails you when spending passes 80% of the limit, or
 # when AWS forecasts that it will pass 100%. `count = 0` means "do not create it", so the budget only
-# exists when enable_budget = true. A budget only sends alerts; it never stops or deletes anything.
-# Optional guard-rail. Account-wide (not tag-filtered) because cost allocation
-# tags must be activated manually in Billing before a tag filter sees anything.
+# exists when enable_budget = true (false in both envs/*.tfvars today). A budget only sends alerts;
+# it never stops or deletes anything. It is account-wide (not tag-filtered) because cost allocation
+# tags must be activated manually in Billing before a tag filter sees anything, so it also counts
+# other projects in the same account.
 resource "aws_budgets_budget" "monthly" {
   count = var.enable_budget ? 1 : 0
 
@@ -310,9 +335,12 @@ resource "aws_budgets_budget" "monthly" {
 }
 
 # Step 9a: collect the addresses and ids that the CLI scripts need into one map. The key names are a
-# fixed contract (design.md section 6) that the CLI scripts rely on.
+# fixed contract (design.md section 6) that the CLI scripts rely on. Nothing secret is in it: ids and
+# addresses identify resources but grant nothing on their own.
 locals {
   # Contract: design.md section 6. scripts/invoke_agent.py, demo_access.py and chat_ui.py read this file.
+  # In the pipeline, the smoke test runs in the same job right after apply and reads the files Terraform
+  # just wrote on the runner; the job deletes .deploy/ at the end.
   deploy_outputs = {
     region                  = var.region
     account_id              = local.account_id
@@ -347,8 +375,8 @@ resource "local_file" "deploy_outputs" {
 # Step 9c: write the demo users' names, passwords and groups to .deploy/<env>/users.json, so the scripts can
 # log in as alice, bob or carol. "Sensitive" hides the content from Terraform's screen output, and
 # permission 0600 means only your own user account may read the file (on Linux and macOS).
-# Demo credentials (design.md section 8). .deploy/ is git-ignored; the passwords
-# also live in Terraform state, which is acceptable for throw-away demo users.
+# Format: design.md section 8. .deploy/ is git-ignored; the passwords also live in Terraform state,
+# which is acceptable for throw-away demo users.
 resource "local_sensitive_file" "demo_users" {
   filename        = "${path.root}/../../.deploy/${var.environment}/users.json"
   content         = jsonencode(module.identity.demo_users)

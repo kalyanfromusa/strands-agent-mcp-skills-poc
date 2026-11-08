@@ -6,7 +6,7 @@
 #
 # Where it fits
 #   The root main.tf passes runtime_arn to module "gateway", which builds the `support` target's
-#   address from it, and writes it to .deploy/outputs.json as support_mcp_runtime_arn.
+#   address from it, and writes it to .deploy/<env>/outputs.json as support_mcp_runtime_arn.
 #
 # Step by step
 #   1. Report the runtime ARN and id once the runtime is created.
@@ -17,5 +17,3 @@
 # =====================================================================================================
 
 output "runtime_arn" { value = aws_bedrockagentcore_agent_runtime.this.agent_runtime_arn }
-output "runtime_id" { value = aws_bedrockagentcore_agent_runtime.this.agent_runtime_id }
-output "log_group" { value = terraform_data.log_group.output.name }

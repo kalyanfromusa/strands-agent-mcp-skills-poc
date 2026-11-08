@@ -57,7 +57,7 @@ from pydantic import Field
 
 from common.store import get_store
 
-# The FAQ entries ship next to this file inside the deployment zip.
+# The FAQ entries ship next to this file inside the container image (see the Dockerfile).
 FAQ_FILE = Path(__file__).with_name("faq.json")
 PRIORITIES = ("low", "medium", "high")
 # Common words that carry no meaning for the FAQ search ("how", "the", "my", ...), so they are ignored.

@@ -7,7 +7,7 @@ What this file does
 
     The agent has no domain knowledge. Its behaviour comes from skills (SKILL.md folders,
     loaded with the Strands `AgentSkills` plugin) and its data and rules from MCP tools behind
-    the Gateway. Entry point for the Runtime: `app.py` at the zip root (`python app.py`).
+    the Gateway. Entry point for the Runtime: `/app/app.py` in the container image (`python app.py`).
 
     In plain words: this code knows nothing about orders, returns or tickets. Swap the skills folder and the
     Gateway tools, and the same code becomes a different assistant. That is the "generic agent" idea.
@@ -48,8 +48,8 @@ Key terms
     Bearer token / JWT: the user's signed login token; its `sub` claim is the user's unique id.
     Passthrough: forwarding the user's own token to the Gateway, so it can apply per-user permissions.
 
-Import layout: modules are flat (`from config import Settings`), so the zip root holds
-`app.py`, `config.py`, ... next to the dependencies. Locally, `agent/` is put on sys.path.
+Import layout: modules are flat (`from config import Settings`), so the image's /app folder holds
+`app.py`, `config.py`, ... side by side (see agent/Dockerfile). Locally, `agent/` is put on sys.path.
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-# Make the sibling modules (config.py, gateway_auth.py, ...) importable both locally and in the deployed zip.
+# Make the sibling modules (config.py, gateway_auth.py, ...) importable both locally and in the container image.
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))

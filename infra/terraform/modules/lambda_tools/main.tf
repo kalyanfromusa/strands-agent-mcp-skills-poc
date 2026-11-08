@@ -24,6 +24,7 @@
 #   arm64: the processor type (AWS Graviton); cheaper than x86 for the same work.
 # =====================================================================================================
 
+# The function's name, e.g. shopassist-prod-orders-tools; also used for its role and log group.
 locals {
   function_name = "${var.name_prefix}-orders-tools"
 }
@@ -94,9 +95,10 @@ resource "aws_cloudwatch_log_group" "this" {
 
 # Step 4: the function itself, from a container image (Python 3.12 Lambda base image, arm64; the
 # image's CMD names handler.lambda_handler), at most 30 seconds and 256 MB of memory per call.
-# A new image_uri (new git sha) is an in-place update of the function code. The environment variables tell the code to use
-# DynamoDB (not the in-memory store used for local runs, STORE=memory) and which tables to use. depends_on makes sure
-# the log group and permissions exist before the first call can happen.
+# A new image_uri (new git sha) is an in-place update of the function code. The environment
+# variables tell the code to use DynamoDB (not the in-memory store used for local runs,
+# STORE=memory) and which tables to use. depends_on makes sure the log group and permissions exist
+# before the first call can happen.
 resource "aws_lambda_function" "this" {
   function_name = local.function_name
   role          = aws_iam_role.this.arn

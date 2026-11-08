@@ -10,7 +10,7 @@
 #   and agent_runtime. Because those modules use these values, Terraform creates storage first.
 #
 # Step by step
-#   1. Report the bucket.
+#   1. Report the bucket (name and ARN).
 #   2. Report the skills location, only once all skills files are uploaded.
 #   3. Report the table names (for the code's settings) and ARNs (for permission rules).
 #
@@ -18,11 +18,11 @@
 #   ARN (Amazon Resource Name): the unique id of an AWS resource, used in permission rules.
 # =====================================================================================================
 
-# The bucket name and ARN.
+# The bucket name (used by agent_runtime for its read permission, and written to outputs.json).
 output "artifacts_bucket" { value = aws_s3_bucket.artifacts.id }
-output "artifacts_bucket_arn" { value = aws_s3_bucket.artifacts.arn }
 
-# The folder (key prefix) inside the bucket where the skills are stored.
+# The folder (key prefix) inside the bucket where the skills are stored. agent_runtime uses it to
+# limit the agent's read permission to this folder.
 output "skills_prefix" { value = "skills/" }
 
 # The full skills address the agent reads at start-up, e.g. s3://<bucket>/skills/.

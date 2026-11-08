@@ -129,3 +129,13 @@ def test_render_table_and_exit_code():
     assert demo.exit_code(outcomes) == 1
     assert demo.exit_code(outcomes[:1]) == 0
     assert demo.exit_code([]) == 1
+
+
+def test_reseed_targets_the_environment_table(monkeypatch):
+    # The orders table is shopassist-<env>-orders; the default prefix "shopassist" matches no table.
+    import seed_data
+
+    calls = []
+    monkeypatch.setattr(seed_data, "seed", lambda region, prefix: calls.append((region, prefix)) or 10)
+    demo.reseed("us-east-1", "prod")
+    assert calls == [("us-east-1", "shopassist-prod")]

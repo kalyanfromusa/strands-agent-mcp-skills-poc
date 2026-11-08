@@ -389,11 +389,16 @@ async def gateway_viewer_checks(url: str, token: str) -> tuple[list[str], Any, B
     return await _with_gateway(url, token, run)
 
 
-def reseed(region: str) -> None:
-    """Reset the demo orders in DynamoDB (see scripts/seed_data.py) so order 1042 is returnable again."""
+def reseed(region: str, environment: str) -> None:
+    """Reset the demo orders in DynamoDB (see scripts/seed_data.py) so order 1042 is returnable again.
+
+    The orders table is `shopassist-<env>-orders`, so the prefix must include the environment
+    (the same `--prefix shopassist-<env>` Terraform passes to seed_data.py).
+    """
     from seed_data import seed
 
-    print(f"re-seeding demo orders in {region} ... {seed(region)} orders")
+    prefix = f"shopassist-{environment}"
+    print(f"re-seeding demo orders in {region} ({prefix}-orders) ... {seed(region, prefix)} orders")
 
 
 def main() -> int:
@@ -414,13 +419,13 @@ def main() -> int:
     # Step 1 (continued): the deployment outputs must name the region, the agent, the Gateway and the
     # Cognito users app client.
     outputs = load_json(Path(args.outputs))
-    for key in ("region", "agent_runtime_arn", "gateway_url", "cognito_users_client_id"):
+    for key in ("region", "environment", "agent_runtime_arn", "gateway_url", "cognito_users_client_id"):
         if not outputs.get(key):
             raise SystemExit(f"{args.outputs} has no {key!r}")
     demo = Demo(outputs, Path(args.users), timeout=args.timeout)
     # Step 2: re-seed only when a scenario that depends on order 1042 will run.
     if not args.no_reseed and {"a", "b"} & set(selected):
-        reseed(outputs["region"])
+        reseed(outputs["region"], outputs["environment"])
 
     # Step 3: run the scenarios in RUN_ORDER. An error becomes a failed row instead of stopping the demo.
     outcomes: list[Outcome] = []

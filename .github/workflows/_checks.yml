@@ -2,19 +2,33 @@
 # .github/workflows/_checks.yml: the shared checks (tests, IaC lint, image build + check + scan)
 #
 # What this file does
-#   A reusable workflow (called with `uses:` from ci.yml and build.yml, never run by itself). It runs,
-#   with no AWS access at all:
-#     test    uv sync + pytest (offline: moto, no AWS) and the lock-file drift check;
+#   A reusable workflow (called with `uses:` from ci.yml and build.yml, never run by itself). It runs
+#   three jobs side by side, with no AWS access at all:
+#     test    uv sync + pytest (offline: moto fakes DynamoDB, no AWS) and the lock-file drift check;
 #     iac     terraform fmt/validate for the three roots, tflint, checkov (report only for now);
-#     images  one leg per image on a native arm64 runner: build, start + check, Trivy scan. No push.
+#     images  one leg per image (agent, support_mcp, orders_lambda, role_mapper) on a native arm64
+#             runner: build, start + check, Trivy scan. Nothing is pushed.
 #
 # Where it fits
 #   ci.yml = these checks + a read-only plan on pull requests. build.yml = these checks on main after a
-#   merge. Nothing here can change AWS; deploy.yml is the only workflow that deploys.
+#   merge. Nothing here can change AWS; deploy.yml is the only workflow that deploys (it runs the unit
+#   tests and the image build + check + scan again itself, right before pushing).
+#
+# Step by step
+#   1. test:   install the exact locked Python packages, run the unit tests, check the image lock files.
+#   2. iac:    check Terraform formatting and validity offline, then lint (tflint) and scan (checkov).
+#   3. images: for each of the four images, run .github/actions/build-image (build, check, scan).
 #
 # Key terms
 #   Reusable workflow: a workflow other workflows call like a function (on: workflow_call).
 #   permissions: what the job's built-in GITHUB_TOKEN may do; read-only here.
+#   IaC (Infrastructure as Code): the Terraform files that describe the AWS resources.
+#   moto: a Python library that imitates AWS services in memory, so the tests need no AWS account.
+#   tflint / checkov: Terraform checkers; tflint finds mistakes, checkov finds risky security settings.
+#   arm64: the processor type (AWS Graviton) that AgentCore Runtime and the Lambdas run on.
+#   Matrix: one job definition run several times in parallel, once per listed image.
+#   Pinned actions (`@<40-character commit hash> # vX`): every third-party step is fixed to one exact
+#     commit, so a moved tag upstream can't slip different code into the pipeline.
 # =====================================================================================================
 name: checks
 
@@ -25,22 +39,27 @@ permissions:
   contents: read
 
 jobs:
+  # ------------------------------------------------------------------ 1. unit tests + lock files
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      # Get the code. persist-credentials: false = don't leave a GitHub token on disk for later steps.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Install uv and Python 3.12; the cache keeps downloaded packages between runs (faster).
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.12"
           enable-cache: true
+      # --frozen: install exactly what uv.lock says, and fail instead of silently updating it.
       - run: uv sync --frozen
       - run: uv run pytest -q
       # The image lock files must match uv.lock (scripts/pin_requirements.py).
       - run: uv run python scripts/pin_requirements.py --check
 
+  # ------------------------------------------------------------------ 2. Terraform checks (offline)
   iac:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -48,11 +67,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # terraform_wrapper: false = run the plain terraform binary (the wrapper would echo output to logs).
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_wrapper: false
+      # Fails if any .tf file isn't in Terraform's standard layout (run `terraform fmt -recursive` to fix).
       - name: terraform fmt
         run: terraform fmt -check -recursive infra/terraform
+      # -backend=false: download providers only, never touch the real state in S3 (no AWS access here).
       - name: terraform validate (bootstrap, platform, main)
         run: |
           for d in infra/terraform/bootstrap infra/terraform/platform infra/terraform; do
@@ -60,6 +82,7 @@ jobs:
             terraform -chdir="$d" validate -no-color
           done
       - uses: terraform-linters/setup-tflint@6ffdbaa3be476b3431f7275c26966ef32ff60337 # v6.3.2
+      # Only findings of severity "error" fail the job; warnings are shown but tolerated.
       - name: tflint
         run: tflint --recursive --chdir=infra/terraform --minimum-failure-severity=error
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -67,6 +90,9 @@ jobs:
       - name: checkov
         run: uvx --from checkov checkov -d infra/terraform --framework terraform --compact --quiet --soft-fail
 
+  # ------------------------------------------------------------------ 3. images (one leg per image)
+  # Native arm64 runner: the images are built for arm64 without slow emulation.
+  # fail-fast: false = one failing image doesn't cancel the others, so every problem shows in one run.
   images:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
@@ -86,6 +112,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Build, start + check and scan this leg's image; tagged with the commit SHA, never pushed.
       - uses: ./.github/actions/build-image
         with:
           kind: ${{ matrix.kind }}

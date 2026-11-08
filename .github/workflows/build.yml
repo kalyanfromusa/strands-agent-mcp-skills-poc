@@ -10,6 +10,17 @@
 #   pass to deploy.yml. Images are pushed only by deploy.yml, right before deploying them, so ECR only
 #   ever holds deployed images and can keep exactly two (current + previous).
 #   The build also warms the GitHub Actions layer cache, so the deploy's own build is fast.
+#
+# Step by step
+#   1. checks: run _checks.yml (tests, Terraform checks, the four images built, started and scanned).
+#   2. ready:  only if every check passed, write a "Ready to deploy" note with the commit SHA on the
+#              run's summary page.
+#
+# Key terms
+#   SHA: the 40-character fingerprint git gives every commit; images are tagged with it.
+#   ECR (Elastic Container Registry): AWS's private storage for container images.
+#   Layer cache: Docker reuses unchanged parts of an image from earlier builds instead of rebuilding.
+#   workflow_dispatch: also lets you start this workflow by hand (Actions → build → Run workflow).
 # =====================================================================================================
 name: build
 
@@ -21,18 +32,24 @@ on:
 permissions:
   contents: read
 
+# A newer merge cancels the build still running for an older one: only the newest commit matters.
 concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # Step 1: the shared checks (no AWS access, nothing pushed).
   checks:
     uses: ./.github/workflows/_checks.yml
 
+  # Step 2: runs only when every check passed (needs: checks). Writes a note, nothing else.
+  # "image_tag empty" in deploy.yml means "the head of main when you start the deploy", which is this
+  # commit as long as nothing else was merged since.
   ready:
     needs: checks
     runs-on: ubuntu-24.04
     steps:
+      # The SHA arrives through an environment variable rather than pasted into the script (safer habit).
       - name: Ready to deploy
         env:
           SHA: ${{ github.sha }}

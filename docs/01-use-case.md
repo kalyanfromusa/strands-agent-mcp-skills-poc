@@ -38,8 +38,8 @@ permissions using the same assistant. The deployed demo creates three of them:
 
 | User | Cognito group | Can use the agent? | Tools |
 |---|---|---|---|
-| `alice` | `shop-admin` | Yes | All 7 |
-| `bob` | `shop-viewer` | Yes | Read-only: `get_order`, `list_customer_orders`, `check_return_eligibility`, `get_ticket`, `search_faq` |
+| `alice` | `Group-ShopAssist-Admin` | Yes | All 7 |
+| `bob` | `Group-ShopAssist-Viewer` | Yes | Read-only: `get_order`, `list_customer_orders`, `check_return_eligibility`, `get_ticket`, `search_faq` |
 | `carol` | none | No: HTTP 403 at the Runtime, before any agent code runs | None |
 
 (Customer `C001` "Alice Martin" and operator `alice` are unrelated. The operator names follow the
@@ -51,7 +51,7 @@ Gateway), not by the agent code. See [03-architecture.md](03-architecture.md#per
 ## Example conversations
 
 These are the flows exercised in the local end-to-end run with Bedrock
-(`us.anthropic.claude-haiku-5-5`). Replies are paraphrased. The dim line under each reply in the CLI
+(`us.anthropic.claude-haiku-4-5-20251001-v1:0`). Replies are paraphrased. The dim line under each reply in the CLI
 lists the skills and tools used.
 
 **Eligible return (admin)**
@@ -102,5 +102,5 @@ the agent.
   depend on the model behaving.
 - **Cheap.** Everything is serverless and on demand (Runtime, Lambda, DynamoDB on-demand, S3), logs
   keep 7 days, and the stack is torn down with one command. See [07-cost.md](07-cost.md).
-- **Two delivery paths.** The same resource graph in Terraform and in plain boto3 calls, so you
-  can compare them ([06-terraform-vs-boto3.md](06-terraform-vs-boto3.md)).
+- **Production-style delivery.** Terraform only, arm64 container images in ECR, GitHub Actions with OIDC roles
+  and an approved manual deploy, and on-demand create/destroy ([10-ci-cd.md](10-ci-cd.md)).

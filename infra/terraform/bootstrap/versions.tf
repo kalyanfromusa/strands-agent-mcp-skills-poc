@@ -7,7 +7,8 @@
 #
 # Where it fits
 #   There's no `backend` block: this stack's own state stays in a local file, because the remote bucket
-#   is what this stack creates. Credentials come from the environment, e.g. AWS_PROFILE=personal.
+#   is what this stack creates. It is applied by hand, not by the pipeline. Credentials come from the
+#   environment, e.g. AWS_PROFILE=personal.
 #
 # Step by step
 #   1. `terraform init` downloads the AWS provider within the allowed version range.
@@ -18,6 +19,7 @@
 #   Default tags: tags added automatically to every resource that supports tags.
 # =====================================================================================================
 
+# Step 1: the versions this stack accepts.
 terraform {
   required_version = ">= 1.10"
 
@@ -29,6 +31,7 @@ terraform {
   }
 }
 
+# Step 2: the AWS connection: region and the tags added to every resource.
 provider "aws" {
   region = var.region
 

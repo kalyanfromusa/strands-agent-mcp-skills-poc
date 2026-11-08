@@ -9,18 +9,21 @@
 #       (prod requires your approval) to create, change and delete that environment's resources.
 #
 # Where it fits
-#   deploy.yml's apply job runs with `environment: <env>`, so GitHub's token says
-#   repo:<repo>:environment:<env>, and only that matches the trust policy (iam_ci.tf step 2).
-#   The apply role can only touch resources named shopassist-<env>-* / shopassist_<env>_* (or tagged
-#   project=shopassist + environment=<env> where AWS names resources by generated id). This account
+#   deploy.yml's apply job (and destroy.yml's destroy job) runs with `environment: <env>`, so GitHub's
+#   token says <subject prefix>:environment:<env>, and only that matches the trust policy (iam_ci.tf
+#   step 2). The apply role can mostly only touch resources named shopassist-<env>-* /
+#   shopassist_<env>_* (or, for Cognito pools, whose ARNs hold a generated id: tagged
+#   project=shopassist + environment=<env>). Exceptions: the four ECR repositories are shared by all
+#   environments, and AgentCore is allowed account-wide (see "Known to be broad" below). This account
 #   also hosts other projects, so this scoping is what keeps a ShopAssist deploy away from them.
 #
 # Step by step
 #   1. Names and ARN patterns per environment.
 #   2. The permissions boundary (a managed policy). The apply role may create roles only if they carry
 #      this boundary, so it can't create a role more powerful than the boundary (privilege escalation).
-#   3. The apply role's permissions, one statement group per AWS service the main stack uses.
-#   4. The role itself and the policy attachment.
+#   3. The apply role's permissions, one statement group per AWS service the main stack uses (3a-3k).
+#   4. A second policy for the clean sweep after a destroy (list calls, emptying ECR).
+#   5. The role itself and the attachment of both policies.
 #
 # Key terms
 #   Permissions boundary: a ceiling on a role's permissions. Effective rights = policy AND boundary.
@@ -29,10 +32,13 @@
 #     Cognito pools, whose ARNs contain a generated id instead of a name.
 #   Known to be broad: bedrock-agentcore actions are allowed on every AgentCore resource in this account
 #     and region (several of its ARNs embed generated ids). Tighten once the deployed ARNs are known
-#     (task 6.11 checks the negative cases).
+#     (task 6.13 checks the negative cases).
 # =====================================================================================================
 
 # Step 1: names and ARN patterns per environment.
+#   arn_prefix: the common start of the ARNs of each AWS service in this account and region.
+#   env:        per environment, the name start with dashes (most resources) and with underscores
+#               (AgentCore runtimes and their log groups).
 locals {
   arn_prefix = {
     ac     = "arn:aws:bedrock-agentcore:${var.region}:${local.account_id}"
@@ -54,6 +60,9 @@ locals {
 
 # ---------------------------------------------------------------- Step 2: permissions boundary
 
+# The ceiling for every workload role of one environment (agent runtime, support runtime, Gateway,
+# orders Lambda, role mapper). Each statement covers what at least one of them needs; the roles' own
+# policies (in the main stack's modules) are narrower still.
 data "aws_iam_policy_document" "boundary" {
   for_each = local.env
   #checkov:skip=CKV_AWS_111:A boundary is a ceiling, not a grant; "*" covers AgentCore, logs and ECR login, whose ARNs are generated.
@@ -108,6 +117,8 @@ data "aws_iam_policy_document" "boundary" {
   }
 }
 
+# The boundary as a managed policy, shopassist-<env>-boundary. Its ARN is a platform output that the
+# main stack attaches to every role it creates.
 resource "aws_iam_policy" "boundary" {
   for_each = local.env
 
@@ -118,6 +129,7 @@ resource "aws_iam_policy" "boundary" {
 
 # ---------------------------------------------------------------- Step 3: apply permissions
 
+# What `terraform apply` (and destroy) of one environment's main stack may do.
 data "aws_iam_policy_document" "apply" {
   for_each = local.env
   #checkov:skip=CKV_AWS_111:Remaining "*" resources are create/list calls without a resource ARN, guarded by tag or service conditions.
@@ -141,7 +153,9 @@ data "aws_iam_policy_document" "apply" {
   }
 
   # 3b. Images: only the deploy job pushes images (right before deploying them), checks that tags
-  #     exist, and deletes an image it pushed if the deploy then fails (keeps ECR at current + previous).
+  #     exist, and deletes an image it pushed if the deploy fails before Terraform changed anything
+  #     (keeps ECR at current + previous). Get/SetRepositoryPolicy: Lambda needs a pull permission on
+  #     the repository, which AWS adds when a function is created from an image.
   statement {
     sid       = "EcrLogin"
     actions   = ["ecr:GetAuthorizationToken"]
@@ -318,13 +332,14 @@ data "aws_iam_policy_document" "apply" {
   }
 }
 
-# Step 3b: a second policy for the clean sweep after a destroy. It is separate only because a managed
+# Step 4: a second policy for the clean sweep after a destroy. It is separate only because a managed
 # policy may hold at most 6,144 characters, and the apply policy above is close to that.
 data "aws_iam_policy_document" "sweep" {
   for_each = local.env
 
   # Clean sweep after a destroy (scripts/leftovers.py, destroy.yml): list calls that only work on
-  #     "*" (they return names, never data), and emptying the ShopAssist ECR repositories.
+  # "*" (they return names, never data), emptying the ShopAssist ECR repositories, and reading the
+  # account's budgets to spot a leftover one.
   statement {
     sid = "LeftoverScan"
     actions = [
@@ -348,8 +363,10 @@ data "aws_iam_policy_document" "sweep" {
 
 }
 
-# ---------------------------------------------------------------- Step 4: the roles
+# ---------------------------------------------------------------- Step 5: the roles
 
+# The apply role per environment, shopassist-gha-apply-<env>, usable for at most one hour per run and
+# only from the GitHub environment <env> (trust policy from iam_ci.tf).
 resource "aws_iam_role" "apply" {
   for_each = local.env
 
@@ -359,6 +376,7 @@ resource "aws_iam_role" "apply" {
   max_session_duration = 3600
 }
 
+# The step 3 permissions as a managed policy, attached to that environment's apply role.
 resource "aws_iam_policy" "apply" {
   for_each = local.env
 
@@ -374,6 +392,7 @@ resource "aws_iam_role_policy_attachment" "apply" {
   policy_arn = aws_iam_policy.apply[each.key].arn
 }
 
+# The step 4 sweep permissions as a managed policy, attached to the same apply role.
 resource "aws_iam_policy" "sweep" {
   for_each = local.env
 

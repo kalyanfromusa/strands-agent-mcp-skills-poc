@@ -8,29 +8,43 @@ What this file does
     Looks for ShopAssist resources by NAME (shopassist-<env>-*, shopassist_<env>_*) and by TAG
     (project=shopassist, environment=<env>) in every service the project uses, and prints what it finds.
     With --sweep it also removes the things that outlive `terraform destroy`:
-      - container images in the ECR repositories (the repositories themselves belong to the platform);
-      - AgentCore Identity secrets still waiting in Secrets Manager's recovery window (force-deleted now,
-        so nothing is recoverable or billed for the next 7-30 days);
-      - log groups that AgentCore created on its own (for example for runtime versions);
-      - the environment's Terraform state file in the state bucket.
-    It exits 1 if anything is still there at the end, so a workflow fails loudly instead of leaving cost.
+      - container images in every shopassist-* ECR (Elastic Container Registry) repository (the
+        repositories themselves belong to the platform stack); skipped with --keep-images, because
+        dev and prod share the repositories;
+      - AgentCore Identity secrets of the scope (Secrets Manager names containing
+        "bedrock-agentcore-identity"), whether still live or already waiting in the recovery window.
+        They are force-deleted, so nothing is recoverable or billed for the next 7-30 days;
+      - every CloudWatch log group whose name matches the scope, typically the ones AgentCore created
+        on its own (for example for runtime versions);
+      - the environment's Terraform state file in the state bucket (one-environment scope only).
+    It exits 1 if any resource is still there at the end, so a workflow fails loudly instead of
+    leaving cost. A check that couldn't run (for example access denied) is printed as WARN but does
+    not by itself make it exit 1.
 
 Where it fits
-    The last step of .github/workflows/destroy.yml (one environment) and of
-    scripts/destroy_everything.sh (--all). It's also a handy read-only check at any time.
+    The last step of .github/workflows/destroy.yml (--env <env> --sweep) and of
+    scripts/destroy_everything.sh (--env <env> --sweep after each environment, then --all at the end).
+    Without --sweep it only reads, so it's also a handy check at any time.
 
 Step by step
     1. Build the name patterns for the chosen scope (one environment, or everything).
-    2. With --sweep: delete ECR images, scheduled secrets, stray log groups, the env state file.
+    2. With --sweep: delete ECR images, the scope's AgentCore Identity secrets, matching log groups,
+       the env state file.
     3. Scan every service: AgentCore (runtimes, gateways, policy engines, credential providers,
        workload identities), Lambda, DynamoDB, S3, Cognito, IAM roles and policies, CloudWatch logs,
        Secrets Manager (including secrets scheduled for deletion), ECR, Budgets and the tagging API.
     4. Print the findings and exit 0 (clean) or 1 (something left).
 
 Key terms
+    Scope: which resources count. --env prod = only shopassist-prod-* / shopassist_prod_* (and never
+      the platform's own roles, boundaries or state bucket); --all = everything named shopassist-*.
     Recovery window: Secrets Manager normally keeps a deleted secret for 7-30 days so it can be
       restored. A clean sweep removes it immediately.
-    Tagging API: one AWS call that lists resources by tag across most services.
+    AgentCore Identity: the AgentCore service that stores OAuth (sign-in) client secrets for the
+      Gateway; it keeps them in Secrets Manager.
+    Tagging API: one AWS call that lists resources by tag across most services. Its index can lag
+      behind, so a just-deleted resource may still show up there for a while (reported as NOTE).
+    Pagination: AWS returns long lists page by page; `paged` below fetches every page.
 """
 
 from __future__ import annotations
@@ -47,24 +61,40 @@ PROJECT = "shopassist"
 
 
 def patterns(env: str | None) -> list[re.Pattern[str]]:
-    """Step 1: names that belong to the scope. env=None means every ShopAssist resource."""
+    """Step 1: names that belong to the scope. env=None means every ShopAssist resource.
+
+    Everything: a name that starts with shopassist- / shopassist_, or has it right after a "/"
+    (log group paths). One env: shopassist-<env>- or shopassist_<env>_ at the start or after a "/".
+    Case is ignored.
+    """
     if env is None:
         return [re.compile(rf"^{PROJECT}[-_]", re.I), re.compile(rf"/{PROJECT}[-_]", re.I)]
     return [re.compile(rf"(^|/){PROJECT}[-_]{env}[-_]", re.I)]
 
 
 # Owned by the platform stack, not by an environment: an environment destroy must leave them alone.
+# (The permissions boundaries shopassist-<env>-boundary, the CI roles shopassist-gha-*, the state bucket.)
 PLATFORM_OWNED = re.compile(rf"^{PROJECT}-(dev|prod)-boundary$|^{PROJECT}-gha-|^{PROJECT}-tfstate-")
 
 
 def matches(name: str, pats: list[re.Pattern[str]], env: str | None = "x") -> bool:
+    """Does this resource name belong to the scope?
+
+    With one environment (any env other than None; the default "x" just means "not everything"),
+    platform-owned names never count, so an environment destroy doesn't report or sweep the
+    foundation. With env=None (--all) they count like everything else.
+    """
     if env is not None and PLATFORM_OWNED.search(name):
         return False
     return any(p.search(name) for p in pats)
 
 
 def paged(client, op: str, key: str, **kw) -> Iterable[dict]:
-    """Iterate over every item of a paginated list call (with or without a boto3 paginator)."""
+    """Iterate over every item of a paginated list call (with or without a boto3 paginator).
+
+    `op` is the list operation's name, `key` the field in each page that holds the items. If boto3
+    has no ready-made paginator for the operation, follow `nextToken` by hand until it runs out.
+    """
     if client.can_paginate(op):
         for page in client.get_paginator(op).paginate(**kw):
             yield from page.get(key, [])
@@ -88,6 +118,8 @@ def safe(label: str, fn: Callable[[], list[str]], problems: list[str]) -> list[s
 
 
 def main() -> int:
+    """Read the options, optionally sweep, scan every service, print the report. Returns the exit code."""
+    # Options: --region, and exactly one of --env <dev|prod> / --all; --sweep and --keep-images are optional.
     parser = argparse.ArgumentParser(description="Find (and with --sweep remove) ShopAssist leftovers.")
     parser.add_argument("--region", required=True)
     scope = parser.add_mutually_exclusive_group(required=True)
@@ -97,6 +129,9 @@ def main() -> int:
     parser.add_argument("--keep-images", action="store_true", help="with --sweep: don't delete ECR images")
     args = parser.parse_args()
 
+    # env = None means "everything" (--all). One AWS session for every call; `c` is a shortcut for
+    # creating a client of one service. `found` collects leftovers per service, `problems` the checks
+    # that couldn't run.
     region, env = args.region, (None if args.all else args.env)
     pats = patterns(env)
     session = boto3.session.Session(region_name=region)
@@ -108,6 +143,8 @@ def main() -> int:
 
     # ---------------------------------------------------------------- Step 2: sweep
     if args.sweep:
+        # 2a. ECR images: every image in every shopassist-* repository, deleted 100 at a time (the
+        # most one call accepts). The repositories stay; they belong to the platform stack.
         ecr = c("ecr")
         if not args.keep_images:
             for repo in paged(ecr, "describe_repositories", "repositories"):
@@ -118,16 +155,20 @@ def main() -> int:
                     ecr.batch_delete_image(repositoryName=repo["repositoryName"], imageIds=ids[i:i + 100])
                 if ids:
                     print(f"  swept {len(ids)} image(s) from {repo['repositoryName']}")
+        # 2b. AgentCore Identity secrets of this scope, including ones already scheduled for deletion
+        # (IncludePlannedDeletion). The scope is judged on the last part of the name (after the last "/").
         sm = c("secretsmanager")
         for s in paged(sm, "list_secrets", "SecretList", IncludePlannedDeletion=True):
             if "bedrock-agentcore-identity" in s["Name"] and matches(s["Name"].split("/")[-1], pats, env):
                 sm.delete_secret(SecretId=s["ARN"], ForceDeleteWithoutRecovery=True)
                 print(f"  swept secret {s['Name']} (no recovery window)")
+        # 2c. Every log group whose name matches the scope (log messages cost money while stored).
         logs = c("logs")
         for g in paged(logs, "describe_log_groups", "logGroups"):
             if matches(g["logGroupName"], pats, env):
                 logs.delete_log_group(logGroupName=g["logGroupName"])
                 print(f"  swept log group {g['logGroupName']}")
+        # 2d. One environment only: its state file. Already gone (or no bucket at all) is fine.
         if env is not None:
             bucket = f"{PROJECT}-tfstate-{account}-{region}"
             try:
@@ -138,6 +179,9 @@ def main() -> int:
                     problems.append(f"state file: {e.response['Error']['Code']}")
 
     # ---------------------------------------------------------------- Step 3: scan
+    # 3a. One list call per service, returning resource names; only names in the scope are kept.
+    # Each entry is wrapped in `safe`, so one denied call doesn't stop the rest of the scan.
+    # Budgets is a global service that is always called in us-east-1.
     ac = c("bedrock-agentcore-control")
     checks: dict[str, Callable[[], list[str]]] = {
         "AgentCore runtimes": lambda: [r["agentRuntimeName"] for r in paged(ac, "list_agent_runtimes", "agentRuntimes")],
@@ -160,8 +204,9 @@ def main() -> int:
         if hits:
             found[label] = hits
 
-    # ECR: with --all the repositories themselves are leftovers; for one env only images, and only when sweeping them.
+    # 3b. ECR: with --all the repositories themselves are leftovers; for one env only images, and only when sweeping them.
     def ecr_check() -> list[str]:
+        """List shopassist-* repositories (with --all) or images that a sweep should have removed."""
         ecr, out = c("ecr"), []
         for repo in paged(ecr, "describe_repositories", "repositories"):
             name = repo["repositoryName"]
@@ -199,9 +244,13 @@ def main() -> int:
             code = e.response["Error"]["Code"]
             return code not in ("ResourceNotFoundException", "NotFound", "404", "NoSuchBucket")
 
+    # 3c. The tagging API catches resources the name checks above don't cover. ARNs (Amazon Resource
+    # Names, AWS's full ids) that only the lagging tag index still lists go to `stale` (a NOTE, not a
+    # failure).
     stale: list[str] = []
 
     def tagged() -> list[str]:
+        """ARNs tagged project=shopassist (and environment=<env> for one env) that really still exist."""
         filters = [{"Key": "project", "Values": [PROJECT]}]
         if env is not None:
             filters.append({"Key": "environment", "Values": [env]})
@@ -215,6 +264,7 @@ def main() -> int:
     if tag_hits:
         found["Tagged (project=shopassist)"] = tag_hits
 
+    # 3d. With --all: the GitHub OIDC (OpenID Connect) provider, which has no ShopAssist name or tag.
     if env is None:
         try:
             c("iam").get_open_id_connect_provider(
@@ -235,6 +285,7 @@ def main() -> int:
             print(f"        {h}")
     for p in problems:
         print(f"WARN  {p}")
+    # Only real leftovers fail the run; checks that couldn't run are warnings.
     return 1 if found else 0
 
 

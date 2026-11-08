@@ -148,7 +148,7 @@ def lambda_handler(event: dict[str, Any] | None, context: Any) -> dict[str, Any]
     """Route a Gateway tool invocation to the matching tool function.
 
     AWS Lambda calls this function for every request (it is the "entry point" named in the
-    Terraform and boto3 deployment).
+    container image's CMD, see mcp_servers/orders_lambda/Dockerfile).
     """
     # Step 1: work out which tool was asked for, and get its arguments.
     tool = tool_name_from_context(context)

@@ -109,8 +109,8 @@ Guardrails come from three places:
 
 | Caller | Tools the agent sees | Typical behaviour |
 |---|---|---|
-| `alice` (`shop-admin`) | All 7 | Full flows: lookups, returns, tickets |
-| `bob` (`shop-viewer`) | 5 read-only (no `create_return`, no `create_ticket`) | Looks up orders, checks eligibility, quotes the refund amount, searches the FAQ. When asked to create a return or ticket, says the account lacks permission and offers what it can do |
+| `alice` (`Group-ShopAssist-Admin`) | All 7 | Full flows: lookups, returns, tickets |
+| `bob` (`Group-ShopAssist-Viewer`) | 5 read-only (no `create_return`, no `create_ticket`) | Looks up orders, checks eligibility, quotes the refund amount, searches the FAQ. When asked to create a return or ticket, says the account lacks permission and offers what it can do |
 | `carol` (no group) | None | HTTP 403 from the Runtime. The agent never runs |
 | Local emulator `--role admin` | All 7 | Like alice |
 | Local emulator `--role viewer` | 5 read-only | Like bob (the emulator filters `tools/list` and rejects other calls) |

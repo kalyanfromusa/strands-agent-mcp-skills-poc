@@ -7,13 +7,15 @@
 #
 # Where it fits
 #   The root main.tf passes these to mcp_runtime, gateway and agent_runtime (to check tokens and to
-#   fetch the Gateway's machine token), and writes them to .deploy/outputs.json and .deploy/users.json.
+#   fetch the Gateway's machine token), and writes them to .deploy/<env>/outputs.json and
+#   .deploy/<env>/users.json. Every output here is used by the root stack.
 #
 # Step by step
 #   1. Report the user pool id, discovery URL and token URL.
 #   2. Report the two app client ids (M2M client and users client).
 #   3. Report the credential provider's name, ARN and the ARN of the secret it stores.
 #   4. Report the demo users' usernames, passwords and groups, once their groups are set up.
+#   5. Report the sign-in domain address used by the browser sign-in.
 #
 # Key terms
 #   Client id: the public id of a Cognito app client; it is written into every token it issues.
@@ -32,6 +34,8 @@ output "discovery_url" {
 
 # token_url: where a client trades its credentials for a token.
 # client_id: the M2M client. users_client_id: the client people log in through.
+# oauth_provider_name / _arn: the AgentCore Identity credential provider (step 8 in main.tf); the
+# Gateway's support target uses the ARN, the agent's settings get the name.
 output "token_url" { value = local.token_url }
 output "client_id" { value = aws_cognito_user_pool_client.m2m.id }
 output "users_client_id" { value = aws_cognito_user_pool_client.users.id }
@@ -50,9 +54,9 @@ output "oauth_provider_secret_arn" {
 }
 
 # The demo logins, e.g. { alice = { username, password, group = "Group-ShopAssist-Admin" }, ... }.
-# The root main.tf writes this to .deploy/users.json.
+# The root main.tf writes this to .deploy/<env>/users.json.
 output "demo_users" {
-  description = "design.md section 8 format for .deploy/users.json."
+  description = "design.md section 8 format for .deploy/<env>/users.json."
   sensitive   = true
   value = {
     for u, g in var.demo_users : u => {
@@ -65,5 +69,6 @@ output "demo_users" {
   depends_on = [aws_cognito_user_in_group.this]
 }
 
-# The managed-login address (sign-in page, /oauth2/authorize, /oauth2/token) used by the browser sign-in.
+# The managed-login address (sign-in page, /oauth2/authorize, /oauth2/token) used by the browser
+# sign-in. The root writes it to outputs.json as cognito_domain_url.
 output "domain_url" { value = local.domain_url }

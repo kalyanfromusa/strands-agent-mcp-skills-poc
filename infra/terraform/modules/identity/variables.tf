@@ -2,18 +2,23 @@
 # modules/identity/variables.tf: inputs of the identity (login) module
 #
 # What this file does
-#   Declares the naming inputs and the list of demo users with the Cognito group each one joins.
+#   Declares the naming inputs, the list of demo users with the Cognito group each one joins, the
+#   optional Entra ID settings, and the browser sign-in return addresses.
 #
 # Where it fits
-#   Filled in by the module "identity" block in infra/terraform/main.tf (which passes only the naming
-#   values, so demo_users keeps its default). Read by modules/identity/main.tf and outputs.tf.
+#   Filled in by the module "identity" block in infra/terraform/main.tf, which passes the naming
+#   values and the Entra settings. demo_users, callback_urls and logout_urls are not passed, so they
+#   keep their defaults. Read by modules/identity/main.tf and outputs.tf.
 #
 # Step by step
-#   1. Receive the name prefix, region and account id from the root module.
+#   1. Receive the name prefix, API identifier, region and account id from the root module.
 #   2. Use the default demo_users list unless a caller overrides it.
+#   3. Receive the Entra switch and settings (all empty and unused while enable_entra = false).
 #
 # Key terms
 #   Cognito group: a named set of users; the group name is written into each member's login token.
+#   Callback URL: where Cognito sends the browser back after sign-in. Only addresses on the user's own
+#     machine (loopback, localhost) are allowed here.
 # =====================================================================================================
 
 # Used to name the user pool, its domain and the clients.
@@ -25,13 +30,14 @@ variable "api_identifier" {
   type    = string
   default = "shopassist"
 }
+# region and account_id build the Cognito addresses and the unique domain prefix.
 variable "region" { type = string }
 variable "account_id" { type = string }
 
 # The three demo personas that show the access levels:
 #   alice -> Group-ShopAssist-Admin  (may use every tool)
 #   bob   -> Group-ShopAssist-Viewer (read-only tools only)
-#   carol -> no group    (the agent refuses her before doing anything)
+#   carol -> no group    (the agent runtime refuses her before any agent code runs)
 variable "demo_users" {
   description = "Demo users => Cognito group (\"\" = no group). design.md section 8."
   type        = map(string)
@@ -43,8 +49,9 @@ variable "demo_users" {
 }
 
 # ---------------------------------------------------------------- Entra ID federation (P7)
-# Off by default: with enable_entra = false the pool, clients and tokens behave as before, plus the
-# browser sign-in (code + PKCE) for Cognito users.
+# Off by default: with enable_entra = false there is no Entra provider and no role-mapper trigger;
+# the browser sign-in (authorization code + PKCE) still works for the Cognito users. The root
+# variables.tf validates these values when Entra is switched on.
 
 variable "enable_entra" {
   description = "Add Entra ID as a federated identity provider (with the role mapper trigger)."

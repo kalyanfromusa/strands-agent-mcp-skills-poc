@@ -11,11 +11,19 @@
 # Where it fits
 #   ci.yml and build.yml (via _checks.yml) run it for every pull request and merge. deploy.yml runs it
 #   in the approved apply job for any image that isn't in ECR yet, then pushes the result. Only images
-#   that passed all four steps can ever be pushed.
+#   that passed all four steps can ever be pushed. The images: agent, support_mcp, orders_lambda and
+#   role_mapper (the `kind` input below; its description lists only the first three, but all four work).
 #
 # Key terms
 #   Composite action: steps packaged for reuse, like a function.
+#   Buildx / BuildKit: Docker's image builder; it can cache layers in GitHub's own cache storage.
+#   GHA cache (type=gha): GitHub Actions' cache storage, one "scope" per image so they don't overwrite
+#     each other. mode=max keeps every layer, so most rebuilds only redo the code layers.
+#   Provenance / SBOM (Software Bill of Materials): extra records Docker can attach to an image. They
+#     are switched off because they turn the image into a multi-part "index", while Lambda and
+#     AgentCore Runtime expect one plain single-platform image.
 #   Trivy: an open-source scanner that compares the image's packages with public vulnerability lists.
+#   CVE: the public id of one known vulnerability, e.g. CVE-2026-12345.
 #   ignore-unfixed: don't fail on vulnerabilities that have no fix yet (nothing could be done anyway).
 # =====================================================================================================
 name: Build and check a ShopAssist image
@@ -44,6 +52,7 @@ outputs:
 runs:
   using: composite
   steps:
+    # Preparation: start the Buildx builder (needed for the GitHub Actions layer cache below).
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
     # Step 1-2: build natively for arm64 and load the result into the local Docker.
@@ -59,13 +68,16 @@ runs:
         # A plain single-platform image (no attestation index), which AgentCore and Lambda expect.
         provenance: false
         sbom: false
+        # Labels record where the image came from: the repository URL and the exact commit.
         labels: |
           org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           org.opencontainers.image.revision=${{ inputs.tag }}
+        # Reuse layers from earlier builds of the same image, and save the new ones for next time.
         cache-from: type=gha,scope=${{ inputs.kind }}
         cache-to: type=gha,mode=max,scope=${{ inputs.kind }}
 
-    # Step 3: does it start and answer like AWS expects?
+    # Step 3: does it start and answer like AWS expects? (The inputs reach the script only through
+    # environment variables, never pasted into the command line.)
     - name: Container checks (${{ inputs.kind }})
       shell: bash
       env:
@@ -74,7 +86,8 @@ runs:
         SRC: ${{ inputs.source }}
       run: bash "$SRC/scripts/ci_image_checks.sh" "$KIND" "$IMAGE"
 
-    # Step 4: known vulnerabilities with a fix available fail the build.
+    # Step 4: known HIGH or CRITICAL vulnerabilities with a fix available fail the build (exit-code 1);
+    # the findings are printed as a table in the log.
     - name: Trivy scan (${{ inputs.kind }})
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
       env:

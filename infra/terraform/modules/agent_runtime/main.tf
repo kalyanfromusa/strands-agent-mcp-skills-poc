@@ -3,12 +3,12 @@
 #
 # What this file does
 #   Runs the generic Strands agent (agent/app.py, packaged as a container image) on AgentCore Runtime
-#   as <prefix>_<env>_agent, with its
-#   own permissions, its login check and its log group.
+#   as <prefix>_<env>_agent, with its own permissions, its login check and its log group.
 #
 # Where it fits
 #   Called last by the root main.tf (module "agent_runtime"), because it needs the Gateway URL.
-#   scripts/invoke_agent.py logs a user in with Cognito and sends the question plus the user's token
+#   scripts/invoke_agent.py (or the local chat page scripts/chat_ui.py) logs a user in with Cognito
+#   and sends the question plus the user's token
 #   here. The runtime checks the token (layer 1 of access control), then the agent code loads the
 #   skills from S3, asks the Bedrock model what to do, and calls tools through the Gateway with the
 #   same user token (where layer 2, the Cedar policies, applies).
@@ -32,9 +32,10 @@
 #   Custom claim: an extra field in the token, here cognito:groups (the user's Cognito groups).
 #   Token passthrough: the agent forwards the user's own token to the Gateway instead of its own.
 #   SigV4: the usual AWS request signing with access keys; not accepted once a JWT authorizer is set.
+#   Trust policy: the part of an IAM (Identity and Access Management) role that says WHO may use it.
 # =====================================================================================================
 
-# runtime_name: the runtime's name, e.g. shopassist_agent (underscores only, no dashes allowed).
+# runtime_name: the runtime's name, e.g. shopassist_prod_agent (underscores only, no dashes allowed).
 # runtime_logs: the pattern that matches every AgentCore runtime log group in this account and region.
 locals {
   # Runtime names allow [a-zA-Z][a-zA-Z0-9_]{0,47}, so shopassist-prod becomes shopassist_prod_agent.
@@ -82,7 +83,7 @@ resource "aws_iam_role" "this" {
 #   InvokeModel:            ask the Bedrock model (the agent's "brain") for the next step.
 #   EcrAuth/EcrPullImage:   pull its own container image from ECR.
 #   ListSkills, ReadSkills: list and download the files under skills/ only.
-#   Logs/XRay/Metrics:      write logs, request traces and metrics.
+#   LogGroups/DescribeLogGroups/LogEvents, XRay, Metrics: write logs, request traces and metrics.
 # Note there is no permission to call the tools directly: all tool calls go through the Gateway,
 # which does its own checks.
 # No credential-provider / Secrets Manager permissions: the agent forwards the
@@ -127,7 +128,8 @@ data "aws_iam_policy_document" "permissions" {
     resources = [var.ecr_repository_arn]
   }
 
-  # Cold-start sync of s3://bucket/skills/ to /tmp/skills.
+  # Cold-start download of s3://<bucket>/skills/ into a local cache folder (agent/skill_source.py).
+  # The s3:prefix condition means the agent may list only what is under skills/.
   statement {
     sid       = "ListSkills"
     actions   = ["s3:ListBucket"]

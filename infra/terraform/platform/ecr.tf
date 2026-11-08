@@ -8,7 +8,8 @@
 # Where it fits
 #   GitHub Actions' deploy.yml pushes images tagged with the full git commit SHA. The
 #   main stack (each environment) points its runtimes and Lambdas at <repo>:<sha>. Because the repos
-#   are shared, the image tested in dev is byte-for-byte the image promoted to prod.
+#   are shared, an image tested in dev would be byte-for-byte the image promoted to prod (only prod
+#   is deployed today).
 #
 # Step by step
 #   1. One repository per entry in local.repos.
@@ -17,16 +18,20 @@
 #   3. Scan on push: ECR checks each new image for known vulnerabilities (basic scanning, free).
 #   4. A lifecycle rule keeps only the newest 2 images: the one running now and the previous one, for
 #      rollback. This is safe because images are pushed ONLY by the deploy job, right before it deploys
-#      them (merges build and scan, but don't push). If a deploy fails after pushing, the job deletes
-#      the image it just pushed, so the two kept images are always "current" and "previous".
-#      ECR runs the cleanup asynchronously (usually within 24 hours).
+#      them (merges build and scan, but don't push). If a deploy fails after pushing but before
+#      Terraform started changing anything, the job deletes the images it just pushed, so the two kept
+#      images stay "current" and "previous". ECR runs the cleanup asynchronously (usually within
+#      24 hours).
 #
 # Key terms
 #   ECR (Elastic Container Registry): AWS's private store for container images.
 #   Image tag: a label on an image; here always the 40-character git commit SHA.
 #   force_delete: lets `terraform destroy` delete a repository that still holds images.
+#   AES256: encryption at rest with AWS-managed keys (free).
 # =====================================================================================================
 
+# The four repositories. The logical names on the left are the keys the main stack uses
+# (local.images["agent"] etc.).
 locals {
   # Logical name => repository name (design.md section 1 and 5).
   repos = {
@@ -55,7 +60,8 @@ resource "aws_ecr_repository" "this" {
   }
 }
 
-# Step 4: keep only the newest N images per repository.
+# Step 4: keep only the newest N images per repository (N = ecr_keep_last_images, default 2).
+# "tagStatus any" counts every image, tagged or not; anything beyond the newest N is expired (deleted).
 resource "aws_ecr_lifecycle_policy" "this" {
   for_each = aws_ecr_repository.this
 

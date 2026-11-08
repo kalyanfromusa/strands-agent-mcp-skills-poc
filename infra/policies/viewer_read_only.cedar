@@ -4,7 +4,7 @@
 // the five tools that read data: get_order, list_customer_orders, check_return_eligibility,
 // get_ticket and search_faq. The tools that change data (create_return in the orders target and
 // create_ticket in the support target) are not in the list, so bob does not even see them in
-// tools/list. (Keep their full prefixed names out of this file: a test checks they never appear here.)
+// tools/list. (Their full prefixed names are deliberately left out of this file, even in comments.)
 //
 // Where it fits: uploaded into the AgentCore policy engine by Terraform (modules/gateway). Before upload, the Gateway ARN placeholder below is replaced with the
 // real Gateway ARN (Amazon Resource Name, its unique id), so this permit only applies to our Gateway.

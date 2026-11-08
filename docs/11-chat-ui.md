@@ -8,7 +8,7 @@ it, or *Run* to play a whole conversation in order.
 | Mode | Command | Agent | Token | Who decides the tools |
 |---|---|---|---|---|
 | Local | `chat_ui.py --local` | `agent/app.py` on `localhost:8080` | Dummy token from the page (not checked) | `local_gateway.py --role admin\|viewer` |
-| Deployed | `chat_ui.py` | AgentCore Runtime from `.deploy/outputs.json` | Real Cognito **access** token | Runtime JWT authorizer + Cedar at the Gateway |
+| Deployed | `chat_ui.py` | AgentCore Runtime from `.deploy/<env>/outputs.json` | Real Cognito **access** token | Runtime JWT authorizer + Cedar at the Gateway |
 
 Why a relay: the AgentCore Runtime doesn't answer CORS preflights, so a page can't call it straight
 from the browser. The relay listens on `127.0.0.1` only, refuses other Host/Origin headers, and
@@ -65,7 +65,7 @@ picks the matching sample tab and labels the chat. Locally:
 
 ## Deployed testing
 
-After a Terraform or boto3 deployment (`.deploy/outputs.json` exists):
+After a deployment, once `.deploy/prod/outputs.json` exists on your machine ([04 §4](04-deploy-terraform.md#4-getting-deployenv-on-your-machine)):
 
 ```powershell
 uv run python scripts/chat_ui.py --open
@@ -82,9 +82,9 @@ the conversation (one microVM per session) until you click *New session*.
 
 ## Getting a JWT
 
-The agent runtime accepts **access tokens** issued to the `shopassist-users` app client, and the
-user must be in `shop-admin` or `shop-viewer`. ID tokens and M2M (client_credentials) tokens are
-rejected. Access tokens are valid for 60 minutes.
+The agent runtime accepts **access tokens** issued to the `shopassist-<env>-users` app client, and the
+user must be in `Group-ShopAssist-Admin` or `Group-ShopAssist-Viewer`. ID tokens and M2M (client_credentials) tokens are
+rejected. Access tokens are valid for 15 minutes.
 
 ### Option A: the helper (local machine)
 
@@ -92,7 +92,7 @@ rejected. Access tokens are valid for 60 minutes.
 uv run python scripts/chat_ui.py --print-token alice      # or bob, carol
 ```
 
-It reads the password from `.deploy/users.json` and signs in with `USER_PASSWORD_AUTH`, exactly like
+It reads the password from `.deploy/<env>/users.json` and signs in with `USER_PASSWORD_AUTH`, exactly like
 `invoke_agent.py`.
 
 ### Option B: AWS console with CloudShell
@@ -100,12 +100,12 @@ It reads the password from `.deploy/users.json` and signs in with `USER_PASSWORD
 Use this when you only have console access, or no local AWS CLI.
 
 1. **Pick the region.** In the console, switch to the deployment's region (default `us-east-1`).
-2. **Copy the app client id.** Open **Amazon Cognito → User pools → `shopassist-pool` → App
+2. **Copy the app client id.** Open **Amazon Cognito → User pools → `shopassist-prod-pool` → App
    clients** (left menu under *Applications*; older console layouts have it on the *App integration*
-   tab) → `shopassist-users`, and copy the *Client ID*. It's also `cognito_users_client_id` in
-   `.deploy/outputs.json`.
+   tab) → `shopassist-prod-users`, and copy the *Client ID*. It's also `cognito_users_client_id` in
+   `.deploy/prod/outputs.json`.
 3. **Check the user's group (optional).** Open **Users → `alice` → Group memberships**, which should
-   show `shop-admin`. bob has `shop-viewer`, and carol has none.
+   show `Group-ShopAssist-Admin`. bob has `Group-ShopAssist-Viewer`, and carol has none.
 4. **Open CloudShell** (the terminal icon in the console's top bar). It runs with your console
    identity. The sign-in call itself needs no IAM permission, because it's a public client.
 5. **Sign in and print the access token:**
@@ -119,22 +119,20 @@ Use this when you only have console access, or no local AWS CLI.
      --query AuthenticationResult.AccessToken --output text
    ```
 
-   The password is in `.deploy/users.json` on the machine that deployed (with Terraform it's also
-   in the state file). Quote the parameters with single quotes, because generated passwords can
+   The password is in `.deploy/prod/users.json` (recreate it as in [04 §4](04-deploy-terraform.md#4-getting-deployenv-on-your-machine);
+   it's also in the Terraform state). Quote the parameters with single quotes, because generated passwords can
    contain shell characters.
 6. **Copy the token** (one long `eyJ…` line) into the chat page.
 
 To check what you got, paste the token into the page and look at the decoded claims. `token_use`
 must be `access`, and `cognito:groups` must list the group.
 
-**Why not the console's "View login page"?** The Cognito managed login (hosted UI) needs an app
-client with OAuth flows and a callback URL. `shopassist-users` only enables
-`ALLOW_USER_PASSWORD_AUTH` and `ALLOW_REFRESH_TOKEN_AUTH`, so the login page has nothing to send the
-token back to. You could add an authorization-code flow and a callback URL to the client, but that's
-a change to the identity setup: Terraform or `deploy.py` would undo it on the next run unless you
-add it to the IaC as well.
+**Browser sign-in instead of a pasted token.** The users client also allows the authorization-code flow with
+PKCE (loopback callback URLs), so `chat_ui.py` has a **Sign in** button and `invoke_agent.py --login` opens the
+Cognito managed login (`scripts/oidc_login.py`). With `enable_entra = true` the login page also offers Entra ID
+([12-entra-federation.md](12-entra-federation.md)).
 
-**Don't** reset a demo user's password in the console to get a token. `.deploy/users.json` would no
+**Don't** reset a demo user's password in the console to get a token. `.deploy/<env>/users.json` would no
 longer match, and `invoke_agent.py`, `demo_access.py` and `--print-token` would fail for that user.
 If you do reset one, set it back as permanent with
 `aws cognito-idp admin-set-user-password --user-pool-id <pool id> --username alice --password '<old password>' --permanent`.
