@@ -179,16 +179,41 @@ def main() -> int:
     if ecr_hits:
         found["ECR"] = ecr_hits
 
+    def still_exists(arn: str) -> bool:
+        """The tagging index can list a resource for hours after it was deleted. Ask the service itself
+        where that's cheap; anything we can't confirm is treated as existing (safe side)."""
+        try:
+            if ":cognito-idp:" in arn and ":userpool/" in arn:
+                c("cognito-idp").describe_user_pool(UserPoolId=arn.rsplit("/", 1)[1])
+            elif ":dynamodb:" in arn and ":table/" in arn:
+                c("dynamodb").describe_table(TableName=arn.rsplit("/", 1)[1])
+            elif ":lambda:" in arn and ":function:" in arn:
+                c("lambda").get_function(FunctionName=arn.rsplit(":", 1)[1])
+            elif arn.startswith("arn:aws:s3:::"):
+                c("s3").head_bucket(Bucket=arn.split(":::", 1)[1])
+            elif ":logs:" in arn and ":log-group:" in arn:
+                name = arn.split(":log-group:", 1)[1].removesuffix(":*")
+                return any(g["logGroupName"] == name for g in c("logs").describe_log_groups(logGroupNamePrefix=name)["logGroups"])
+            return True
+        except ClientError as e:
+            code = e.response["Error"]["Code"]
+            return code not in ("ResourceNotFoundException", "NotFound", "404", "NoSuchBucket")
+
+    stale: list[str] = []
+
     def tagged() -> list[str]:
         filters = [{"Key": "project", "Values": [PROJECT]}]
         if env is not None:
             filters.append({"Key": "environment", "Values": [env]})
         arns = [r["ResourceARN"] for r in paged(c("resourcegroupstaggingapi"), "get_resources", "ResourceTagMappingList", TagFilters=filters)]
-        # The tagging index lags behind deletions; only report ARNs not already explained above.
-        return [a for a in arns if not any(n.split(" ")[0] in a for hits in found.values() for n in hits)]
+        # Skip ARNs already explained by the name checks above, then confirm the rest really exist.
+        arns = [a for a in arns if not any(n.split(" ")[0] in a for hits in found.values() for n in hits)]
+        live = [a for a in arns if still_exists(a)]
+        stale.extend(a for a in arns if a not in live)
+        return live
     tag_hits = safe("Tagging API", tagged, problems)
     if tag_hits:
-        found["Tagged (project=shopassist) - may be index lag, re-check in a few minutes"] = tag_hits
+        found["Tagged (project=shopassist)"] = tag_hits
 
     if env is None:
         try:
@@ -199,6 +224,8 @@ def main() -> int:
             pass
 
     # ---------------------------------------------------------------- Step 4: report
+    for a in stale:
+        print(f"NOTE  already deleted, still in AWS's tag index (it catches up later): {a}")
     if not found and not problems:
         print("CLEAN: no ShopAssist resources left in this scope.")
         return 0
