@@ -92,6 +92,21 @@ jobs:
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Deploying \`$sha\` to **$TARGET_ENV**" >> "$GITHUB_STEP_SUMMARY"
 
+      # The prod gate lives in GitHub settings, where it can be switched off by accident (it was, once).
+      # Refuse to run against prod unless the environment really has a required reviewer.
+      - name: Check that ${{ inputs.target_env }} still requires a reviewer
+        if: inputs.target_env == 'prod'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          rules="$(gh api "repos/${REPO}/environments/${TARGET_ENV}" --jq '[.protection_rules[].type] | join(",")')"
+          case ",$rules," in
+            *,required_reviewers,*) echo "OK: ${TARGET_ENV} requires a reviewer ($rules)" ;;
+            *) echo "::error::GitHub environment ${TARGET_ENV} has no required reviewer (rules: ${rules:-none}). Add one in Settings → Environments → ${TARGET_ENV} before deploying or destroying."; exit 1 ;;
+          esac
+
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.12"

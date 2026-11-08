@@ -116,9 +116,11 @@ Nothing goes in git: secrets, `.deploy/`, `*.tfstate*`, `tfplan`, `dist/`, Entra
       documented Trivy exception for the Lambda RIE (expires 2026-12-31), and CI trust policies switched to GitHub's
       immutable OIDC subject `repo:kalyanfromusa@28615456/strands-agent-mcp-skills-poc@1438682520:*`)*
 - [x] 6.8 🧪 Merge → `build.yml` builds and scans, **nothing is pushed or deployed** *(2026-11-07: run on 9567c7d green, ECR still empty afterwards)*
-- [ ] 6.9 🧪 **First prod deploy**: manual `deploy.yml` (prod) → 👤 approve → images pushed, apply + smoke green
+- [x] 6.9 🧪 **First prod deploy**: manual `deploy.yml` (prod) → 👤 approve → images pushed, apply + smoke green
       *(2026-11-07 run 42425427780: images pushed, **apply 53 added** ✅; smoke c, d ✅ (Runtime 401, Cedar filters + denies);
-      b ❌ only on wording: Haiku 4.5 didn't say "no permission". Skill step 6 fixed; re-deploy pending)*
+      b ❌ only on wording: Haiku 4.5 didn't say "no permission". Skill step 6 fixed. Run 42436314030 (2026-11-08): smoke b, c, d
+      all ✅. ⚠️ That run had NO approval: the `prod` environment had lost its required-reviewer rule. Guard added to
+      deploy/destroy (they refuse to run if prod has no required reviewer))*
 - [ ] 6.10 🔑 🧪 `invoke_agent.py --user alice "Where is my order 1042?"`; `demo_access.py` a–d all ✅
 - [ ] 6.11 🧪 Second deploy with a new SHA → in-place runtime update (not a replacement); ECR holds 2 images per repo
 - [ ] 6.12 🧪 Rollback: `deploy.yml` with the previous SHA → the old image is live again
@@ -134,6 +136,10 @@ Nothing goes in git: secrets, `.deploy/`, `*.tfstate*`, `tfplan`, `dist/`, Entra
 - [x] 6b.3 Platform: second apply-role policy `shopassist-gha-sweep-<env>` (6,144-char managed-policy limit) *(applied 2026-11-07)*
 - [x] 6b.4 `scripts/destroy_everything.sh`: local full teardown (envs → platform → bootstrap → `leftovers.py --all`), typed confirmation
 - [ ] 6b.5 🧪 Destroy prod with `destroy.yml` → leftover scan CLEAN; then `deploy.yml` → prod is back and smoke green
+      *(2026-11-08 run 42442965157: 51 destroyed, swept 2 images × 3 repos and the prod state file; scan CLEAN (one Cognito pool
+      only in AWS's tag index, confirmed deleted). ⚠️ Ran without approval (same missing reviewer rule). Fixed after the run:
+      scan step now uses pipefail (`| tee` had hidden its exit code); the scanner confirms tagged ARNs really exist.
+      Redeploy pending)*
 - [ ] 6b.6 🧪 (when the demo is over) `destroy_everything.sh` → `leftovers.py --all` CLEAN
 
 ## P7. Entra ID federation (cloud-only groups, app roles)
