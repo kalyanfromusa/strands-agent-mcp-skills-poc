@@ -59,6 +59,18 @@ variable "allowed_groups" {
   type        = list(string)
 }
 
+variable "memory_id" {
+  description = "AgentCore Memory id the agent reads and writes (MEMORY_ID). Empty disables memory."
+  type        = string
+  default     = ""
+}
+
+variable "memory_arn" {
+  description = "ARN of that memory, for the execution role's permissions."
+  type        = string
+  default     = ""
+}
+
 # Copied into the agent's settings (not needed in passthrough mode, see main.tf), and log retention days.
 variable "oauth_provider_name" { type = string }
 variable "oauth_scopes" { type = list(string) }

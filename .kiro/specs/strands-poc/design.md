@@ -90,6 +90,7 @@ Env vars (agent):
 | `OAUTH_PROVIDER_NAME` | `shopassist-<env>-cognito` |
 | `OAUTH_SCOPES` | `shopassist/invoke` |
 | `SKILLS_S3_URI` / `SKILLS_DIR` | skills source |
+| `MEMORY_ID` | AgentCore Memory id (`module.memory`); empty = no memory. Actor = token `sub`, session = Runtime session id; long-term namespaces `/actors/{actorId}/semantic/` and `/actors/{actorId}/summaries/{sessionId}/` |
 
 Env vars (support MCP runtime): `STORE`, `TICKETS_TABLE`, `AWS_REGION`. Orders Lambda: `STORE`, `ORDERS_TABLE`, `RETURNS_TABLE`. Role mapper: §9.
 

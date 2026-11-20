@@ -20,6 +20,20 @@
 #   - Logs are public: the full plan output goes to a file that is never printed or uploaded.
 #   - There is no pull_request_target trigger anywhere (that would hand secrets to fork code).
 #
+# Step by step (plan job)
+#   1. Get the code, uv and Terraform.
+#   2. Exchange GitHub's OIDC token for short-lived credentials of the read-only plan role.
+#   3. terraform init + plan for prod into private files; turn the plan into an address-only summary.
+#   4. Post the summary as one PR comment (updated in place on every new push, not duplicated).
+#
+# Key terms
+#   OIDC (OpenID Connect): GitHub hands the job a signed "who I am" token; AWS checks it and returns
+#     temporary credentials for a role. No long-lived AWS keys are stored in GitHub.
+#   Terraform plan: a dry run that lists what `apply` would create, change or delete. It changes nothing.
+#   image_tag: the full git commit SHA (Secure Hash Algorithm fingerprint, 40 hex characters) that
+#     names every container image built from that commit.
+#   Fork PR: a pull request from someone's copy of the repository; it gets no secrets or AWS access.
+#
 # Repository variables used: AWS_REGION, AWS_PLAN_ROLE (see infra/terraform/platform outputs).
 # =====================================================================================================
 name: ci
@@ -31,14 +45,17 @@ on:
 permissions:
   contents: read
 
+# A new push to the same PR cancels the run still going for the older commit (only the latest matters).
 concurrency:
   group: ci-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
+  # 1. Tests, Terraform checks and all four images (no AWS access).
   checks:
     uses: ./.github/workflows/_checks.yml
 
+  # 2. What would this PR change in prod? Runs only after the checks pass.
   plan:
     needs: checks
     # Same-repo PRs only (forks can't get AWS credentials), and only once the plan role is configured.
@@ -49,12 +66,15 @@ jobs:
       contents: read
       id-token: write      # ask GitHub for the OIDC token that AWS exchanges for plan-role credentials
       pull-requests: write # post the summary comment
+    # TF_IN_AUTOMATION / TF_INPUT=0: Terraform never stops to ask a question (no one could answer).
+    # IMAGE_TAG: the PR's latest commit, i.e. the images a deploy of this PR would roll out.
     env:
       TF_IN_AUTOMATION: "1"
       TF_INPUT: "0"
       TARGET_ENV: prod
       IMAGE_TAG: ${{ github.event.pull_request.head.sha }}
     steps:
+      # Step 1: code, uv and Terraform.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -64,6 +84,7 @@ jobs:
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_wrapper: false
+      # Step 2: temporary credentials for the read-only plan role (expire when the job ends).
       - name: AWS credentials (plan role, OIDC)
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
@@ -71,6 +92,9 @@ jobs:
           role-session-name: gha-pr-plan-${{ github.run_id }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # Step 3: init + plan write to files, never to the public log. On an error only the Terraform
+      # error lines (starting with "Error" or the box character │) are shown, at most 40.
+      # The summary goes to the run page and to summary.md for step 4; the raw files are deleted.
       - name: terraform plan (prod, read-only, output kept private)
         working-directory: infra/terraform
         run: |
@@ -84,6 +108,8 @@ jobs:
           cat summary.md >> "$GITHUB_STEP_SUMMARY"
           rm -f tfplan plan.log init.log
 
+      # Step 4: a hidden marker (<!-- shopassist-plan -->) finds this workflow's earlier comment, so a
+      # new push updates that one comment instead of adding another.
       - name: Post or update the PR comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:

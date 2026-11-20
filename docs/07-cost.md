@@ -15,7 +15,7 @@ roughly what its Bedrock tokens cost.
 
 | Service | What's billed | Driver in this PoC | Idle cost |
 |---|---|---|---|
-| Bedrock (Claude Haiku, `us.anthropic.claude-haiku-5-5`) | Input and output tokens | Every model call in the agent loop | None |
+| Bedrock (Claude Haiku 4.5, `us.anthropic.claude-haiku-4-5-20251001-v1:0`) | Input and output tokens | Every model call in the agent loop | None |
 | AgentCore Runtime (agent + support MCP server) | Consumption: vCPU-seconds and GB-seconds of memory per session, billed per second | Active sessions. The agent spends most of its time waiting on Bedrock and tools; check the pricing page for how CPU during I/O wait and session idle time are counted | None (no provisioned capacity) |
 | AgentCore Gateway | Per API request (`tools/list`, `tools/call`), plus tool indexing (per tools indexed per month) | ~5–15 requests per conversation; 7 tools indexed | Tool indexing for 7 tools (tiny) |
 | AgentCore Policy | Per authorization request | Every `tools/list` and `tools/call` on the Gateway | None |
@@ -24,9 +24,11 @@ roughly what its Bedrock tokens cost.
 | Cognito | MAUs; M2M (client_credentials) token requests are priced separately from MAUs | 3 demo users; Gateway M2M tokens for `support` (cached until expiry) | None |
 | Lambda (`shopassist-orders-tools`, arm64, 256 MB) | Requests + GB-seconds | ~2–5 invocations per conversation | None |
 | DynamoDB on-demand (3 tables) | Read/write request units + storage | A few reads/writes per conversation, kilobytes of data | Storage (KB) |
-| S3 (artifacts bucket, versioned) | Storage + requests | 3 zips (tens of MB, plus old versions) + skills | Storage of zips |
+| S3 (artifacts bucket: skills only; the Terraform state bucket) | Storage + requests | A few KB of skills and state files | Negligible |
+| ECR (4 repositories, 2 images each) | Storage per GB-month | About 8 images of a few hundred MB | Image storage (cents per month) |
+| GitHub Actions | Free for public repositories (standard and arm64 runners) | Every PR, merge and deploy | None |
 | CloudWatch Logs (7-day retention) | Ingestion + storage | Runtime and Lambda logs | Storage, 7 days max |
-| AWS Budgets (optional: Terraform `enable_budget`, boto3 `--budget-email`) | Budgets themselves are generally free; check the pricing page | 1 budget | n/a |
+| AWS Budgets (optional: `enable_budget` in `envs/<env>.tfvars`) | Budgets themselves are generally free; check the pricing page | 1 budget | n/a |
 
 ## Bedrock tokens per conversation (estimate)
 
@@ -89,10 +91,9 @@ specs, shorter tool descriptions in `tools_schema.json`, and fewer tools per ski
 
 | Control | How |
 |---|---|
-| 7-day log retention | Terraform `log_retention_days = 7` (variable); boto3 `LOG_RETENTION_DAYS = 7`. Log groups are created up front so they never default to "never expire" |
+| 7-day log retention | `log_retention_days = 7` in `envs/<env>.tfvars`. Log groups are created up front (or, for the ones AgentCore creates itself, given a retention by `scripts/log_group.py`) so they never default to "never expire" |
 | On-demand everything | DynamoDB `PAY_PER_REQUEST`, Lambda, Runtime consumption billing, no NAT gateways or VPC endpoints (network mode `PUBLIC`) |
-| Budget alert (Terraform) | Set `enable_budget = true`, `budget_email`, `budget_limit_usd` (default 5) in `terraform.tfvars`. It alerts at 80% actual and 100% forecasted. The budget is account-wide, because tag-filtered budgets need cost-allocation tags activated in Billing first |
-| Budget alert (boto3) | `uv run python infra/boto3/deploy.py --budget-email you@example.com` creates the same 5 USD monthly budget (`shopassist-monthly`) with the same two alerts. `destroy.py` deletes it |
-| Tag everything | `project=shopassist` on every taggable resource (Terraform `default_tags`; boto3 passes tags explicitly), so leftovers are easy to find |
-| Destroy after the demo | `terraform destroy` ([04](04-deploy-terraform.md#6-destroy)) or the boto3 destroy script ([05](05-deploy-boto3.md#5-destroy)), then check that nothing is left |
-| One stack at a time | Don't deploy Terraform and boto3 side by side: they use the same names |
+| Budget alert (Terraform) | Set `enable_budget = true`, `budget_email`, `budget_limit_usd` (default 5) in `envs/<env>.tfvars`. It alerts at 80% actual and 100% forecasted. The budget is account-wide, because tag-filtered budgets need cost-allocation tags activated in Billing first |
+| Tag everything | `project=shopassist` on every taggable resource (and `environment=<env>`, through Terraform `default_tags`), so leftovers are easy to find |
+| Create and destroy on demand | `destroy.yml` removes a whole environment and scans for leftovers; `deploy.yml` recreates it. `scripts/destroy_everything.sh` also removes the (free) foundation ([04 §7](04-deploy-terraform.md#7-destroy)) |
+| ECR keeps 2 images | Lifecycle rule per repository (current + previous); only deploys push |

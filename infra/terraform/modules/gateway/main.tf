@@ -2,10 +2,11 @@
 # modules/gateway/main.tf: the single tools endpoint (AgentCore Gateway) and its access rules
 #
 # What this file does
-#   Creates the AgentCore Gateway <prefix>-gateway: one MCP address that offers all ShopAssist tools,
-#   with two "targets" behind it (`orders` = the Lambda, `support` = the support MCP server). It also
-#   creates the policy engine and loads the Cedar policies that decide which caller may see and call
-#   which tool.
+#   Creates the AgentCore Gateway <prefix>-gateway (e.g. shopassist-prod-gateway): one MCP address
+#   that offers all ShopAssist tools, with two "targets" behind it (`orders` = the Lambda, `support` =
+#   the support MCP server). It also creates the policy engine and loads the Cedar policies that decide
+#   which caller may see and call which tool. (A third target, `onprem` for the simulated on-prem
+#   warehouse API, is planned but not built; nothing in this file creates it yet.)
 #
 # Where it fits
 #   Called by the root main.tf (module "gateway") after lambda_tools, mcp_runtime and identity exist.
@@ -180,7 +181,8 @@ resource "aws_bedrockagentcore_gateway" "this" {
   description   = "Single MCP endpoint for the ShopAssist agent"
   role_arn      = aws_iam_role.this.arn
   protocol_type = "MCP"
-  # Return target error details to the caller: handy while learning, drop in prod.
+  # Return target error details to the caller: handy while learning. Note it is also on in the
+  # deployed prod stack of this PoC; a real production system would remove it.
   exception_level = "DEBUG"
 
   authorizer_type = "CUSTOM_JWT"
@@ -289,9 +291,10 @@ resource "aws_bedrockagentcore_gateway_target" "support" {
 # Step 6: one policy per infra/policies/*.cedar file (admin_all_tools, m2m_dev_client,
 # viewer_read_only). The file name, without .cedar, becomes the policy name. Before upload, the
 # {{GATEWAY_ARN}} and {{M2M_CLIENT_ID}} placeholders are replaced with the real Gateway ARN and M2M
-# client id. The whole file, comments included, is sent as the policy text.
-# The templates are shared with the boto3 path and use {{...}} placeholders, so plain
-# replace() on file() instead of templatefile() (which only understands ${...}).
+# client id. The whole file, comments included, is sent as the policy text (so editing a comment in
+# a .cedar file shows up as a policy update on the next apply).
+# The templates use {{...}} placeholders, so this is a plain replace() on file() instead of
+# templatefile() (which only understands ${...}).
 resource "aws_bedrockagentcore_policy" "this" {
   for_each = fileset(var.policies_dir, "*.cedar")
 

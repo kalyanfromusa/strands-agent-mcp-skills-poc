@@ -78,6 +78,7 @@ class Settings:
         skills_dir: otherwise, read the skills from this local folder (`SKILLS_DIR`).
         skills_cache_dir: where S3 skills are downloaded to (`SKILLS_CACHE_DIR`).
         mcp_startup_timeout: seconds to wait for the Gateway connection to open (`MCP_STARTUP_TIMEOUT`).
+        memory_id: AgentCore Memory id (`MEMORY_ID`). Empty means no memory (local runs).
     """
 
     model_id: str = DEFAULT_MODEL_ID
@@ -93,6 +94,7 @@ class Settings:
     skills_dir: str = "./skills"
     skills_cache_dir: str = field(default_factory=_default_skills_cache_dir)
     mcp_startup_timeout: int = 30
+    memory_id: str = ""
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Settings:
@@ -121,4 +123,5 @@ class Settings:
             skills_dir=e.get("SKILLS_DIR") or "./skills",
             skills_cache_dir=e.get("SKILLS_CACHE_DIR") or _default_skills_cache_dir(),
             mcp_startup_timeout=int(e.get("MCP_STARTUP_TIMEOUT") or 30),
+            memory_id=(e.get("MEMORY_ID") or "").strip(),
         )

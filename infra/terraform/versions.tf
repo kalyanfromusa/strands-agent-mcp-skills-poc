@@ -9,15 +9,17 @@
 #   exact versions in .terraform.lock.hcl). Every other file then uses these providers.
 #
 # Step by step
-#   1. Refuse to run on Terraform older than 1.9.
+#   1. Refuse to run on Terraform older than 1.10.
 #   2. Download the four providers listed below, within the allowed version ranges.
 #   3. Keep the state (the record of what was created) in S3, one file per environment.
 #
 # Key terms
 #   Provider: a plugin that knows how to talk to one system. "aws" creates AWS resources; "local"
 #     writes files on your computer; "random" makes passwords; "time" adds deliberate pauses.
-#   State: Terraform's record of what it created, kept in terraform.tfstate (git-ignored).
-#   Backend: where the state is stored: the S3 state bucket, key main/<env>.tfstate, with a lock file.
+#   State: Terraform's record of what it created. For this stack it lives in the S3 state bucket
+#     (not on your computer), as main/<env>.tfstate.
+#   Backend: where the state is stored: the S3 state bucket, key main/<env>.tfstate, with a lock file
+#     (main/<env>.tfstate.tflock) so two runs can't change the same environment at once.
 # =====================================================================================================
 
 terraform {
@@ -30,7 +32,8 @@ terraform {
       # 6.71 is the first version whose bedrockagentcore_* schemas match .ref/tf_agentcore_schema.*
       version = ">= 6.71, < 7.0"
     }
-    # Local provider: writes .deploy/outputs.json and .deploy/users.json on your computer.
+    # Local provider: writes .deploy/<env>/outputs.json and .deploy/<env>/users.json on the computer
+    # that runs Terraform (your machine, or the GitHub Actions runner).
     local = {
       source  = "hashicorp/local"
       version = ">= 2.5"

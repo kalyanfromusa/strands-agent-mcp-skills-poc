@@ -120,19 +120,19 @@
 
     <details>
       <summary>How to get a token</summary>
-      <p class="note">Quickest: the helper signs in a demo user from <code>.deploy/users.json</code>.</p>
+      <p class="note">Quickest: the helper signs in a demo user from <code>.deploy/&lt;env&gt;/users.json</code>.</p>
       <pre class="cmd">.venv\Scripts\python.exe scripts\chat_ui.py --print-token alice</pre>
       <p class="note">Or with the AWS CLI (use the <strong>AccessToken</strong>, not the IdToken):</p>
       <pre class="cmd" id="cliCmd">aws cognito-idp initiate-auth --region &lt;region&gt; --auth-flow USER_PASSWORD_AUTH --client-id &lt;cognito_users_client_id&gt; --auth-parameters USERNAME=alice,PASSWORD=&lt;password&gt; --query AuthenticationResult.AccessToken --output text</pre>
       <p class="note"><strong>From the AWS console</strong> (no local AWS CLI needed):</p>
       <ol class="note" style="padding-left:18px;margin:4px 0">
-        <li>Pick the deployment's region (top right), open <strong>Amazon Cognito → User pools → shopassist-pool → App clients → shopassist-users</strong> (left menu, under <em>Applications</em>) and copy the <em>Client ID</em>.</li>
+        <li>Pick the deployment's region (top right), open <strong>Amazon Cognito → User pools → shopassist-prod-pool → App clients → shopassist-prod-users</strong> (left menu, under <em>Applications</em>) and copy the <em>Client ID</em>.</li>
         <li>Open <strong>CloudShell</strong> (terminal icon in the console's top bar).</li>
-        <li>Run the command above with that client id and the user's password from <code>.deploy/users.json</code>.</li>
+        <li>Run the command above with that client id and the user's password from <code>.deploy/&lt;env&gt;/users.json</code>.</li>
         <li>Copy the printed token and paste it here.</li>
       </ol>
       <p class="note">The users client only allows <code>USER_PASSWORD_AUTH</code> (no hosted login page), so the console's "View login page" won't issue a token for it. Details: <code>docs/11-chat-ui.md</code>.</p>
-      <p class="note">Tokens expire after 60 minutes. An M2M (client_credentials) token is rejected by the agent runtime.</p>
+      <p class="note">Tokens expire after 15 minutes. An M2M (client_credentials) token is rejected by the agent runtime.</p>
     </details>
 
     <h2>2 · Sample conversations</h2>

@@ -18,7 +18,8 @@
 #   3. Copy the agent's own modules (flat layout: app.py next to config.py etc.).
 #   4. Switch to an unprivileged user and start `python app.py`.
 #
-# Build context: the REPO ROOT (so both images share one convention), with -f:
+# Build context: the REPO ROOT (so all four images share one convention), with -f. The pipeline runs
+# the equivalent of the command below; it's shown for reference only (no local builds, see above):
 #   docker buildx build --platform linux/arm64 -f agent/Dockerfile -t shopassist-agent:dev .
 #   agent/Dockerfile.dockerignore (next to this file) limits what the root context sends.
 #
@@ -27,8 +28,11 @@
 #   uv: a fast Python package installer.
 #   --require-hashes: refuse any package whose file fingerprint differs from the lock file.
 #   /ping: the health check AgentCore calls; /invocations: where each user request arrives.
+#   SHA: the 40-character fingerprint of a git commit, used as the image tag.
+#   ECR (Elastic Container Registry): AWS's private storage for container images.
 # =====================================================================================================
 
+# Step 1: the official Python 3.12 slim base image, for arm64.
 FROM --platform=linux/arm64 python:3.12-slim
 
 # Security updates for the base image's OS packages (the slim image can lag behind Debian's fixes;
@@ -39,14 +43,16 @@ RUN apt-get update \
 
 # COMPILE_BYTECODE=1 (default, used in CI on native arm64): pre-compile .pyc for a faster cold start.
 # Pass --build-arg COMPILE_BYTECODE=0 for a build under QEMU emulation (x86 runner), where compiling the
-# dependencies takes ~10 minutes instead of seconds.
+# dependencies takes ~10 minutes instead of seconds. (The pipeline never does that; it's an escape hatch.)
 ARG COMPILE_BYTECODE=1
 
-# Pinned uv release, copied from its official image (no pip bootstrap, no curl needed).
+# Step 2a: pinned uv release, copied from its official image (no pip bootstrap, no curl needed).
 COPY --from=ghcr.io/astral-sh/uv:0.13.6 /uv /usr/local/bin/uv
 
-# PYTHONUNBUFFERED: log lines reach CloudWatch immediately. UV_*: install into the image's Python,
-# compile .pyc at build time (faster cold start), keep no download cache in the layer.
+# PYTHONUNBUFFERED: log lines reach CloudWatch immediately. PYTHONDONTWRITEBYTECODE: don't write new
+# .pyc files at run time (the code folder isn't writable for the app user anyway). UV_*: install into
+# the image's Python, compile .pyc at build time (faster cold start), keep no download cache in the
+# layer. PORT / AGENT_HOST: where app.py listens (all interfaces, port 8080, as AgentCore expects).
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     UV_SYSTEM_PYTHON=1 \
@@ -57,7 +63,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Step 2: dependencies first, so a code-only change reuses this (large) layer from the build cache.
+# Step 2b: dependencies first, so a code-only change reuses this (large) layer from the build cache.
 COPY agent/requirements.lock.txt /tmp/requirements.lock.txt
 RUN uv pip install --system --require-hashes -r /tmp/requirements.lock.txt && rm /tmp/requirements.lock.txt
 
@@ -69,5 +75,6 @@ COPY agent/*.py /app/
 RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin agent
 USER 10001
 
+# EXPOSE only documents the port; CMD is the program the container runs when it starts.
 EXPOSE 8080
 CMD ["python", "app.py"]

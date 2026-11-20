@@ -8,7 +8,8 @@
 #     delete_images  true (default): also delete every image in the ShopAssist ECR repositories.
 #                    Set false if the OTHER environment is still deployed (the repositories are shared).
 #   Jobs:
-#     1. prepare  checks the inputs.
+#     1. prepare  checks the inputs (run from main, confirmation typed correctly) and that prod still
+#                 requires a reviewer in GitHub's settings.
 #     2. plan     read-only `terraform plan -destroy` with the plan role; its summary (addresses only) is
 #                 what you approve.
 #     3. destroy  waits in the GitHub environment <target_env> (prod: your approval), re-plans and refuses
@@ -19,12 +20,21 @@
 #
 # What is removed: runtimes, Gateway + targets + Cedar policies + policy engine, Lambda, DynamoDB tables
 #   (all orders, returns and tickets), the S3 bucket with the skills, the Cognito pool with every user,
-#   the OAuth credential providers and their secrets, IAM roles, log groups, the budget, images.
+#   the OAuth credential providers and their secrets, IAM roles, log groups, the budget (if enabled), images.
 # What stays (free while empty, and needed to deploy again): the state bucket, the empty ECR
 #   repositories, the GitHub OIDC provider, the CI roles and the permissions boundaries. To remove those
 #   too, run scripts/destroy_everything.sh on your machine (it can't run here: it deletes the very roles
 #   and bucket this workflow uses).
 # Recreate: run deploy.yml again (one click).
+#
+# Key terms
+#   OIDC (OpenID Connect): GitHub gives the job a signed identity token; AWS trades it for short-lived
+#     credentials of one role. No AWS keys are stored in GitHub.
+#   ECR (Elastic Container Registry): AWS's private storage for container images, shared by dev and prod.
+#   Plan hash: a fingerprint of the plan's "address + action" list (scripts/tf_plan_summary.py), so the
+#     destroy that runs is exactly the one that was approved.
+#   State file: Terraform's record of what it created (main/<env>.tfstate in the state bucket).
+#   Recovery window: Secrets Manager normally keeps a deleted secret for 7-30 days; the sweep skips it.
 #
 # Repository variables: AWS_REGION, AWS_PLAN_ROLE. Environment variable: AWS_APPLY_ROLE.
 # =====================================================================================================
@@ -55,6 +65,7 @@ concurrency:
   group: deploy-${{ inputs.target_env }}
   cancel-in-progress: false
 
+# For every job: Terraform must never stop to ask a question (no one could answer it).
 env:
   TF_IN_AUTOMATION: "1"
   TF_INPUT: "0"
@@ -63,10 +74,13 @@ env:
   IMAGE_TAG: "0000000000000000000000000000000000000000"
 
 jobs:
+  # ------------------------------------------------------------------ 1. inputs + prod gate
   prepare:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      # Refuse unless the run is on main and the confirmation is exactly "destroy <target_env>".
+      # The input arrives through an environment variable, never pasted into the script.
       - name: Check inputs
         env:
           CONFIRM: ${{ inputs.confirm }}
@@ -91,6 +105,7 @@ jobs:
             *) echo "::error::GitHub environment ${TARGET_ENV} has no required reviewer (rules: ${rules:-none}). Add one in Settings → Environments → ${TARGET_ENV} before deploying or destroying."; exit 1 ;;
           esac
 
+  # ------------------------------------------------------------------ 2. what will be deleted (read-only)
   plan:
     needs: prepare
     runs-on: ubuntu-24.04
@@ -116,6 +131,9 @@ jobs:
           role-to-assume: ${{ vars.AWS_PLAN_ROLE }}
           role-session-name: gha-destroy-plan-${{ github.run_id }}
           aws-region: ${{ vars.AWS_REGION }}
+      # Plan the destroy into private files (only error lines are ever shown), then publish the
+      # address-only summary (what the approver reads) and the plan hash (job output "hash").
+      # -lock=false: this plan only reads. The raw files are deleted afterwards.
       - name: terraform plan -destroy (output kept private; summary only)
         id: plan
         working-directory: infra/terraform
@@ -130,6 +148,9 @@ jobs:
           echo "hash=$(uv run --no-project python ../../scripts/tf_plan_summary.py --hash < plan.json)" >> "$GITHUB_OUTPUT"
           rm -f tfplan plan.json plan.log init.log
 
+  # ------------------------------------------------------------------ 3. approved: destroy + sweep
+  # Step order: tools → AWS credentials (apply role) → re-plan and compare hashes → destroy →
+  # clean sweep + leftover scan → delete local files.
   destroy:
     needs: plan
     runs-on: ubuntu-24.04
@@ -160,6 +181,8 @@ jobs:
           role-session-name: gha-destroy-${{ inputs.target_env }}-${{ github.run_id }}
           aws-region: ${{ vars.AWS_REGION }}
 
+      # A fresh destroy plan with the apply role (this one takes the state lock). If its hash differs
+      # from the approved one, something changed in between: stop without deleting anything.
       - name: Re-plan the destroy and compare with the approved plan
         working-directory: infra/terraform
         run: |
@@ -171,6 +194,8 @@ jobs:
           [ "$now" = "$APPROVED_HASH" ] || { echo "::error::The destroy plan changed after approval. Nothing destroyed; run it again."; exit 1; }
           echo "destroy plan matches the approved one (${now:0:16})"
 
+      # Applying a saved destroy plan is the same as `terraform destroy`, but limited to exactly what
+      # was approved. Only the "complete" line is shown; on failure, only the error lines (at most 60).
       - name: terraform destroy (output kept private)
         working-directory: infra/terraform
         run: |
@@ -181,6 +206,9 @@ jobs:
             exit 1
           fi
 
+      # Remove what outlives `terraform destroy` (scripts/leftovers.py --sweep), then scan the account.
+      # delete_images = false adds --keep-images, so the images the other environment uses stay.
+      # The report is copied to the run page; the step fails if anything is still left.
       - name: Clean sweep + leftover scan
         shell: bash # = bash -eo pipefail: a failing scan must fail the step even through `| tee`
         run: |
@@ -188,6 +216,7 @@ jobs:
           uv run python scripts/leftovers.py --region "${{ vars.AWS_REGION }}" --env "$TARGET_ENV" --sweep $keep \
             | tee -a "$GITHUB_STEP_SUMMARY"
 
+      # Always, even after a failure: delete the saved plan, the logs and any .deploy/ files.
       - name: Remove local files
         if: always()
         run: rm -rf .deploy infra/terraform/tfplan infra/terraform/*.log

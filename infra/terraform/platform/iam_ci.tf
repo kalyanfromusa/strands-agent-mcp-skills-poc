@@ -32,7 +32,10 @@
 #   Explicit deny: a "Deny" statement always wins over any "Allow", even one from a managed policy.
 # =====================================================================================================
 
-# Step 1: shared names.
+# Step 1: shared names. The account id comes from the credentials Terraform runs with.
+#   state_bucket: the bootstrap bucket, rebuilt from the same naming pattern.
+#   repo_arns:    the four ECR repositories (ecr.tf); used by the apply roles in iam_apply.tf.
+#   sub_main / sub_pull_request: the token subjects of runs on main and of pull requests.
 data "aws_caller_identity" "current" {}
 
 locals {
@@ -45,7 +48,10 @@ locals {
   sub_pull_request = "${var.github_subject_prefix}:pull_request"
 }
 
-# Step 2: trust policies. One document per role, differing only in the allowed "sub" values.
+# Step 2: trust policies. One document per role, differing only in the allowed "sub" values:
+#   "plan"        -> runs on main and pull requests;
+#   "apply-<env>" -> only jobs running in the GitHub environment <env> (one entry per environment).
+# merge() puts both kinds into one map, so for_each builds every document from the same template.
 data "aws_iam_policy_document" "trust" {
   for_each = merge(
     {
@@ -77,6 +83,8 @@ data "aws_iam_policy_document" "trust" {
 
 # ---------------------------------------------------------------- Step 3: plan role
 
+# The plan role itself, usable for at most one hour per run. It carries no permissions boundary: it
+# can't create roles, so it can't hand on more than it has.
 resource "aws_iam_role" "plan" {
   name                 = "${var.name_prefix}-gha-plan"
   description          = "GitHub Actions: terraform plan only (${var.github_repository}, main + same-repo PRs)"
@@ -90,6 +98,7 @@ resource "aws_iam_role_policy_attachment" "plan_readonly" {
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
 }
 
+# The plan role's own policy: state access (3a) plus explicit denies on business data (3b).
 data "aws_iam_policy_document" "plan" {
   # 3a: read every state file and the platform outputs; write/delete only the lock files.
   statement {
@@ -144,6 +153,7 @@ data "aws_iam_policy_document" "plan" {
   }
 }
 
+# Attach that policy to the plan role.
 resource "aws_iam_role_policy" "plan" {
   name   = "terraform-plan"
   role   = aws_iam_role.plan.id

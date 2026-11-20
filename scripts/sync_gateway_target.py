@@ -9,9 +9,10 @@ What this file does
 
 Where it fits
     Called by Terraform (infra/terraform/main.tf, terraform_data "sync_gateway_targets") with a
-    local-exec provisioner, every time the support image tag changes. So the sync is part of
-    `terraform apply`, and the pipeline needs no extra step. Credentials come from the environment
-    Terraform runs in (the GitHub apply role, or AWS_PROFILE=personal locally).
+    local-exec provisioner (a command Terraform runs on the machine it runs on): once when the
+    Gateway is created, and again every time the support image tag or the Gateway id changes. So the
+    sync is part of `terraform apply`, and the pipeline needs no extra step. Credentials come from the
+    environment Terraform runs in (the GitHub apply role in deploy.yml, or AWS_PROFILE=personal locally).
 
 Step by step
     1. List the gateway's targets and find the ids of the requested target names.
@@ -22,6 +23,8 @@ Step by step
 Key terms
     Gateway target: one tool source behind the Gateway (orders = Lambda, support = MCP server).
     Synchronize: the Gateway asks the target for its tools/list again and updates its catalogue.
+    MCP (Model Context Protocol): the standard way an agent lists and calls tools.
+    READY: the target's status once it is usable again.
 """
 
 from __future__ import annotations
@@ -32,11 +35,14 @@ import time
 
 import boto3
 
+# Target statuses: READY = finished; any status in FAILED = give up at once and report the reasons.
+# Every other status (for example SYNCHRONIZING) means "still working, ask again".
 DONE = "READY"
 FAILED = {"FAILED", "UPDATE_UNSUCCESSFUL", "SYNCHRONIZE_UNSUCCESSFUL"}
 
 
 def main() -> int:
+    """Synchronize the named targets and wait for READY. Returns the exit code (0 = all READY)."""
     parser = argparse.ArgumentParser(description="Synchronize AgentCore Gateway targets and wait for READY.")
     parser.add_argument("--region", required=True)
     parser.add_argument("--gateway-id", required=True)
@@ -46,7 +52,8 @@ def main() -> int:
 
     client = boto3.client("bedrock-agentcore-control", region_name=args.region)
 
-    # Step 1: target name -> target id.
+    # Step 1: target name -> target id. The list comes page by page (nextToken = "there is more").
+    # An unknown target name stops here with exit code 1.
     ids: dict[str, str] = {}
     token = None
     while True:
@@ -66,7 +73,8 @@ def main() -> int:
     client.synchronize_gateway_targets(gatewayIdentifier=args.gateway_id, targetIdList=wanted)
     print(f"synchronizing {', '.join(args.target)} on {args.gateway_id} ...")
 
-    # Step 3: wait for READY.
+    # Step 3: wait for READY. `pending` holds the targets not finished yet (id -> name); each round
+    # asks every pending target for its status, then pauses 5 seconds.
     deadline = time.monotonic() + args.timeout
     pending = dict(zip(wanted, args.target))
     while pending:
@@ -84,6 +92,7 @@ def main() -> int:
                 print(f"timed out waiting for {', '.join(pending.values())}", file=sys.stderr)
                 return 1
             time.sleep(5)
+    # Step 4: every target is READY.
     return 0
 
 

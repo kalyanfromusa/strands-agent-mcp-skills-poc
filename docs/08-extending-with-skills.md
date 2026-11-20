@@ -1,7 +1,8 @@
 # 8. Extending with skills and tools
 
 The agent's behaviour lives in `skills/*/SKILL.md`. Adding a skill that uses existing tools needs
-**no code change and no new agent zip**: write the folder, upload it, start a new session.
+**no code change and no new agent image**: write the folder, deploy (only the S3 objects change), start a new
+session.
 
 ## The rules
 
@@ -90,29 +91,19 @@ uv run python scripts/run_local.py --gateway-url http://localhost:8765/mcp \
 `skills: order-changes | tools: orders___get_order, support___create_ticket` in the dim line
 (order 1008 is `PROCESSING`). Try `1006` (`SHIPPED`) to see the refusal path.
 
-### 3. Upload it to S3
+### 3. Deploy it
 
-The deployed agent reads skills from `SKILLS_S3_URI` (`s3://shopassist-artifacts-<account>-<region>/skills/`).
-Upload with the same tool you deployed with, so that its state stays accurate.
+The deployed agent reads skills from `SKILLS_S3_URI` (`s3://shopassist-<env>-artifacts-<account>-<region>/skills/`).
+Terraform mirrors `skills/**` into that prefix (one `aws_s3_object.skill` per file), so a skill ships like any
+other change: open a PR (the plan comment shows only the new skill objects), merge, then run **Actions → deploy**
+and approve. See [10-ci-cd.md](10-ci-cd.md).
 
-**Terraform** (the `aws_s3_object.skill` resources mirror `skills/**`):
-
-```bash
-cd infra/terraform
-terraform apply        # plan shows only the new skill object(s)
-```
-
-**boto3** (the S3 step mirrors `skills/`, including deletions):
+For a quick experiment you can copy the folder straight to S3, but the next Terraform plan will then show drift
+and the deploy will put the bucket back to what is in git:
 
 ```bash
-uv run python infra/boto3/deploy.py      # re-running is idempotent; unchanged resources are skipped
-```
-
-**Direct S3 sync** (quick, but a Terraform-managed bucket will show drift on the next plan):
-
-```bash
-SKILLS_URI=$(uv run python -c "import json; print(json.load(open('.deploy/outputs.json'))['skills_s3_uri'])")
-aws s3 sync skills/ "$SKILLS_URI" --delete --exclude "*/__pycache__/*"
+SKILLS_URI=$(uv run python -c "import json; print(json.load(open('.deploy/prod/outputs.json'))['skills_s3_uri'])")
+AWS_PROFILE=personal aws s3 sync skills/ "$SKILLS_URI" --delete --exclude "*/__pycache__/*"
 ```
 
 ### 4. Start a new session
@@ -136,8 +127,7 @@ uv run python scripts/invoke_agent.py --user alice --new-session \
   and explains that his account can't request changes.
 - Nothing else changed: `git status` shows only `skills/order-changes/`.
 
-To remove a skill, delete the folder and upload again. Terraform and the boto3 step both delete
-objects that no longer exist locally, and so does the `aws s3 sync --delete` command.
+To remove a skill, delete the folder and deploy again: Terraform deletes the objects that are no longer in git.
 
 ### Optional: reference files
 
@@ -192,16 +182,9 @@ Example: `get_return(return_id)` to look up a return.
    - Mirror the change in `VIEWER_TOOLS` in `scripts/local_gateway.py` so `--role viewer` behaves the
      same locally.
 
-4. **Test, build and deploy:**
-
-   ```bash
-   uv run pytest
-   uv run python scripts/build.py --only orders_lambda
-   cd infra/terraform && terraform apply          # or: uv run python infra/boto3/deploy.py
-   ```
-
-   Both paths update the Lambda code (new S3 object version), the target's inline schema and the
-   policies, in that order. `CreatePolicy`/`UpdatePolicy` validates action names against the
+4. **Test and deploy:** `uv run pytest` locally, then PR → merge → **Actions → deploy**. The deploy builds a new
+   orders-lambda image for the commit, and Terraform updates the Lambda image, the target's inline schema and
+   the policies, in that order. `CreatePolicy`/`UpdatePolicy` validates action names against the
    Gateway's tools, so the target must have the tool before a policy can name it (see
    [09](09-troubleshooting.md#policy-create_failed)).
 
@@ -212,24 +195,23 @@ Example: `get_return(return_id)` to look up a return.
 ### MCP tool on the `support` target
 
 Add a function to `mcp_servers/support_mcp/server.py` and to `SUPPORT_TOOLS`. The schema comes from
-the function signature and docstring, so there's no separate schema file. Rebuild
-(`scripts/build.py --only support_mcp`) and deploy. The Gateway caches an MCP-server target's tool list:
+the function signature and docstring, so there's no separate schema file. Deploy as above
+(PR → merge → deploy). The Gateway caches an MCP-server target's tool list, so Terraform re-syncs it whenever the
+support image changes (`terraform_data.sync_gateway_targets` runs `scripts/sync_gateway_target.py`). If you ever
+need to do it by hand:
 
-- The boto3 deploy calls `SynchronizeGatewayTargets` when the MCP runtime changed.
-- With Terraform the target resource itself doesn't change, so re-sync by hand after `apply`:
+```bash
+AWS_PROFILE=personal aws bedrock-agentcore-control synchronize-gateway-targets \
+  --gateway-identifier <gateway_id> --target-id-list <support target id>
+```
 
-  ```bash
-  aws bedrock-agentcore-control synchronize-gateway-targets \
-    --gateway-identifier <gateway_id> --target-id-list <support target id>
-  ```
-
-  `gateway_id` is in `.deploy/outputs.json`. Get the target id with
-  `aws bedrock-agentcore-control list-gateway-targets --gateway-identifier <gateway_id>`.
+`gateway_id` is in `.deploy/<env>/outputs.json`. Get the target id with
+`aws bedrock-agentcore-control list-gateway-targets --gateway-identifier <gateway_id>`.
 
 Then update the Cedar viewer allow-list and `scripts/local_gateway.py` as for a Lambda tool.
 
 ### A new target (new server)
 
 A new target name becomes a new prefix (`<target>___*`) and a new value for `mcp-servers`. Add it in
-both IaC paths (Terraform `modules/gateway`, boto3 `steps/gateway.py`), in the local emulator, and in
-the Cedar policies. The agent code still doesn't change.
+Terraform (`modules/gateway`), in the local emulator, and in the Cedar policies; a new workload also needs a
+Dockerfile, an ECR repository (`platform/ecr.tf`) and a leg in the image matrix of `_checks.yml` and `deploy.yml`. The agent code still doesn't change.

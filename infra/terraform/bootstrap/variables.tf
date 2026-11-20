@@ -16,12 +16,15 @@
 #   Prefix: the first part of every ShopAssist resource name (shopassist).
 # =====================================================================================================
 
+# The AWS region the bucket lives in. It is part of the bucket name.
 variable "region" {
   description = "AWS region for the state bucket (same region as the stacks that use it)."
   type        = string
   default     = "us-east-1"
 }
 
+# The first part of the bucket name and the project tag. The validation keeps it to lowercase letters
+# and digits, which are always valid in S3 bucket names.
 variable "name_prefix" {
   description = "Project prefix; the bucket is <prefix>-tfstate-<account>-<region>."
   type        = string

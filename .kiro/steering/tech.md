@@ -6,6 +6,6 @@
 - IaC: **Terraform only** (`hashicorp/aws` >= 6.71). Three roots: `bootstrap` (state bucket), `platform` (ECR, OIDC, CI roles) and main (per env). S3 backend with `use_lockfile`. Writes `.deploy/<env>/outputs.json`.
 - CI/CD: GitHub Actions (public repo) with GitHub OIDC → IAM roles. PR plan (summary only), build on merge, **manual** deploy with approval on the `prod` environment.
 - Containers: `docker buildx --platform linux/arm64`, dependencies pinned from `uv.lock`, Trivy scan.
-- Tunnel: ngrok (free static domain) for the on-prem API.
+- Tunnel: Cloudflare Tunnel (`onprem-prod.nalamone.com`) for the on-prem API (planned, P8; supersedes ngrok).
 - Environments: `dev` and `prod` defined, `prod` deployed (account 438750401181, AWS profile `personal` per command; never for the Claude session).
 - Tests: `uv run pytest` (moto for DynamoDB). No Postgres. No web UI beyond the local chat page (`scripts/chat_ui.py`).

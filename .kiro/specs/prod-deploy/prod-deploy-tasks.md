@@ -187,16 +187,16 @@ Nothing goes in git: secrets, `.deploy/`, `*.tfstate*`, `tfplan`, `dist/`, Entra
 - [ ] 9.3 Cost check: the current month's spend and the expected idle cost, recorded
 
 ## P10. Documentation (last)
-- [ ] 10.1 README (overview, quick start, Terraform-only, the two accounts and the profile rule)
+- [x] 10.1 README (overview, quick start, Terraform-only, the two accounts and the profile rule) *(2026-11-08)*
 - [ ] 10.2 `docs/03-architecture.md`: new diagram (images, GitHub Actions, Entra/AD, on-prem) and request flows
-- [ ] 10.3 `docs/04-deploy-terraform.md` rewritten: 3 roots, state backend, envs, `image_tag`, first deploy, destroy order
-- [ ] 10.4 `docs/10-ci-cd.md` rewritten: OIDC roles, the 3 workflows, `prod` approval, secrets, log hygiene, rollback
+- [x] 10.3 `docs/04-deploy-terraform.md` rewritten: 3 roots, state backend, envs, `image_tag`, first deploy, destroy order *(2026-11-08; adds recreating `.deploy/<env>/` locally with `-target`, not yet run)*
+- [x] 10.4 `docs/10-ci-cd.md` rewritten: OIDC roles, the 3 workflows, `prod` approval, secrets, log hygiene, rollback *(2026-11-08; + image build, file-by-file map, pipeline troubleshooting; reusable summary in `docs/deployment-blueprint.md`)*
 - [ ] 10.5 `docs/12-entra-federation.md` finished: admin runbook, role mapping, `groups` mode after the trial, revocation, troubleshooting
 - [ ] 10.6 `docs/13-onprem-api.md` (new): ngrok setup, security layers, offline behavior, switching to your own domain later
-- [ ] 10.7 `docs/07-cost.md`, `docs/09-troubleshooting.md` (new failure modes), `docs/11-chat-ui.md` (sign-in),
-      `docs/01`, `02`, `08` touch-ups
-- [ ] 10.8 Remove `docs/05-deploy-boto3.md` and `docs/06-terraform-vs-boto3.md` (a short historical note in `04`); fix
-      the doc numbering and links
+- [x] 10.7 `docs/07-cost.md`, `docs/09-troubleshooting.md` (new failure modes), `docs/11-chat-ui.md` (sign-in),
+      `docs/01`, `02`, `08` touch-ups *(2026-11-08: boto3/zip/old-group/model references removed; on-prem parts follow with P8)*
+- [x] 10.8 Remove `docs/05-deploy-boto3.md` and `docs/06-terraform-vs-boto3.md` (a short historical note in `04`); fix
+      the doc numbering and links *(2026-11-08; numbering kept, the README notes the gap)*
 - [ ] 10.9 Steering, `design.md`, `CLAUDE.md` and the original `strands-poc/tasks.md` (a note pointing here) are final
 - [ ] 10.10 🧪 Every command in the docs was run in P5–P9; `grep` finds no links to removed files and no `shop-admin`/boto3 leftovers
 - [ ] 10.11 "Verified run" section with dates and results (in `04`, `10`, `12`, `13`)

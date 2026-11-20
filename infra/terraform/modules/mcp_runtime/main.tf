@@ -31,7 +31,7 @@
 #   X-Ray: the AWS service that records traces (timelines of each request) for troubleshooting.
 # =====================================================================================================
 
-# runtime_name: the runtime's name, e.g. shopassist_support_mcp (underscores only, no dashes allowed).
+# runtime_name: the runtime's name, e.g. shopassist_prod_support_mcp (underscores only, no dashes).
 # runtime_logs: the pattern that matches every AgentCore runtime log group in this account and region.
 locals {
   # Runtime names allow [a-zA-Z][a-zA-Z0-9_]{0,47}: shopassist-prod => shopassist_prod_support_mcp.
@@ -77,7 +77,8 @@ resource "aws_iam_role" "this" {
 # Step 2a: what the support server may do:
 #   EcrAuth/EcrPullImage: pull its own container image (and only that repository) from ECR.
 #   Tickets:          read, create, update and delete items in the tickets table only.
-#   Logs/XRay/Metrics: write its logs, request traces and metrics so you can see what it did.
+#   LogGroups/DescribeLogGroups/LogEvents, XRay, Metrics: write its logs, request traces and
+#                     metrics so you can see what it did.
 #   WorkloadIdentity: fetch the token for its own workload identity.
 data "aws_iam_policy_document" "permissions" {
   # Pull its own container image from ECR (GetAuthorizationToken only works on "*").
@@ -179,7 +180,8 @@ resource "time_sleep" "iam" {
 #   network_configuration PUBLIC: the runtime has internet access and no private network (VPC) setup.
 #   authorizer_configuration: only tokens issued by our Cognito pool to the M2M client are accepted,
 #     so only the Gateway (and local tests with M2M credentials) can call these tools directly.
-#   environment_variables: settings the Python code reads at start-up (use DynamoDB, which table).
+#   environment_variables: settings the Python code reads at start-up (STORE=dynamodb instead of the
+#     in-memory store used for local runs, and which tickets table to use).
 #   depends_on: start only after the 15-second IAM pause.
 resource "aws_bedrockagentcore_agent_runtime" "this" {
   agent_runtime_name = local.runtime_name

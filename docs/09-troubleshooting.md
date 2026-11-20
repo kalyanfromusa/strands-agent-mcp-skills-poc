@@ -8,13 +8,13 @@
 | "no Authorization header reached the agent" | Runtime header allowlist missing | [Missing Authorization header](#missing-authorization-header) |
 | Policy `CREATE_FAILED` | Action names not on the Gateway | [Policy CREATE_FAILED](#policy-create_failed) |
 | "role ... cannot be assumed" / "not authorized to perform" right after creating a role | IAM propagation | [IAM propagation](#iam-propagation) |
-| Runtime starts but crashes with `ImportError` / "invalid ELF header" | Wrong-platform wheels | [arm64 wheels](#arm64-wheels) |
+| Runtime or Lambda doesn't start / `ImportError` after a deploy | Image or dependency problem | [Images](#images) |
+| A GitHub workflow fails (reviewer guard, plan mismatch, Trivy, AccessDenied) | Pipeline | [10-ci-cd.md §8](10-ci-cd.md#8-troubleshooting-the-pipeline) |
 | `address already in use` / `[Errno 10048]` | Local port busy | [Port in use](#port-in-use) |
-| Resources disappear, credentials stop working, can't create a service | Workshop Studio account limits or expiry | [Workshop Studio accounts](#workshop-studio-accounts) |
 
 ## Model access
 
-The agent calls Bedrock with `MODEL_ID` (default `us.anthropic.claude-haiku-5-5`, a cross-region
+The agent calls Bedrock with `MODEL_ID` (default `us.anthropic.claude-haiku-4-5-20251001-v1:0`, a cross-region
 inference profile) in `AWS_REGION` (default `us-east-1`).
 
 ```bash
@@ -22,11 +22,12 @@ aws bedrock list-inference-profiles --region us-east-1 \
   --query "inferenceProfileSummaries[?contains(inferenceProfileId, 'haiku')].[inferenceProfileId,status]" --output table
 ```
 
-- The profile isn't listed: use a region where it's available, or set `model_id` (Terraform) /
-  `--model-id` (boto3) / `MODEL_ID` (local) to one that is.
+- The profile isn't listed: use a region where it's available, or set `model_id` (in `envs/<env>.tfvars`) /
+  `MODEL_ID` (local) to one that is.
 - It's listed but invocation fails with `AccessDeniedException`: make sure the account has access to
   the Anthropic model in the Bedrock console (model access, including any first-use form for
-  Anthropic models), and that your IAM principal may call `bedrock:InvokeModel`.
+  Anthropic models), and that your IAM principal may call `bedrock:InvokeModel`. Some newer models also
+  need an agreement accepted per account (that's why the deploy account uses Haiku 4.5, decision 2026-11-07).
 - Deployed only: the agent role allows `arn:aws:bedrock:*::foundation-model/*` and inference
   profiles, because a `us.*` profile routes to several regions. An SCP that denies some of those regions
   can still block calls.
@@ -36,21 +37,21 @@ aws bedrock list-inference-profiles --region us-east-1 \
 ## carol gets 403
 
 That's the demo. carol has no Cognito group, and the agent runtime's JWT authorizer requires
-`cognito:groups` to contain `shop-admin` or `shop-viewer`. `scripts/invoke_agent.py --user carol`
+`cognito:groups` to contain `Group-ShopAssist-Admin` or `Group-ShopAssist-Viewer`. `scripts/invoke_agent.py --user carol`
 prints `Access denied (HTTP 403)` and exits with code 3. `scripts/demo_access.py` counts a 401 or 403
 for carol as a pass.
 
 ## 401/403 for alice or bob
 
-- **Wrong client.** The agent runtime only accepts tokens from `shopassist-users`
-  (`cognito_users_client_id` in `.deploy/outputs.json`). An M2M token is rejected there, though the
+- **Wrong client.** The agent runtime only accepts tokens from `shopassist-<env>-users`
+  (`cognito_users_client_id` in `.deploy/<env>/outputs.json`). An M2M token is rejected there, though the
   Gateway accepts it.
-- **Stale `.deploy/`.** After destroying and redeploying, the pool and clients are new. Make sure
-  `.deploy/outputs.json` and `.deploy/users.json` come from the current deployment.
+- **Stale `.deploy/`.** After destroying and redeploying, the pool and clients are new. Recreate
+  `.deploy/<env>/outputs.json` and `users.json` from the current state ([04 §4](04-deploy-terraform.md#4-getting-deployenv-on-your-machine)).
 - **Group membership.** Check with
   `aws cognito-idp admin-list-groups-for-user --user-pool-id <cognito_user_pool_id> --username bob`.
-- **"needs a challenge (NEW_PASSWORD_REQUIRED)".** The user has a temporary password. Both
-  deploy paths set permanent passwords. If you created users by hand, run
+- **"needs a challenge (NEW_PASSWORD_REQUIRED)".** The user has a temporary password. Terraform sets
+  permanent passwords. If you created users by hand, run
   `aws cognito-idp admin-set-user-password --permanent ...`.
 - **SigV4 against a JWT runtime.** A runtime with a JWT authorizer doesn't accept SigV4, so don't
   use `--sigv4` against it.
@@ -62,7 +63,7 @@ Reply: `Error: no Authorization header reached the agent, so it can't call its t
 
 The agent runs with `GATEWAY_AUTH_MODE=passthrough` but didn't receive the header. The agent runtime
 needs `requestHeaderConfiguration.requestHeaderAllowlist = ["Authorization"]` (Terraform
-`request_header_configuration`, boto3 `steps/agent_runtime.py`). Check it with:
+`request_header_configuration` in `modules/agent_runtime`). Check it with:
 
 ```bash
 aws bedrock-agentcore-control get-agent-runtime --agent-runtime-id <id> --query requestHeaderConfiguration
@@ -81,7 +82,7 @@ the tools of the Gateway the engine is attached to. Common causes:
   `tools_schema.json`, or a `support___*` tool the Gateway hasn't listed yet. Action names are the
   full Gateway names with three underscores.
 - **Targets not ready.** The policies were created before both targets were `READY`. Terraform
-  `depends_on` and the boto3 step order prevent this. If you're working by hand, create the targets first.
+  `depends_on` prevents this. If you're working by hand, create the targets first.
 - **Unsubstituted placeholders.** A literal `{{GATEWAY_ARN}}` or `{{M2M_CLIENT_ID}}` left in the
   statement.
 - **Wrong resource type.** Use `resource is AgentCore::Gateway` or `resource == AgentCore::Gateway::"<arn>"`.
@@ -93,8 +94,7 @@ aws bedrock-agentcore-control list-policies --policy-engine-id <policy_engine_id
   --query "policies[].[name,status,statusReasons]"
 ```
 
-The boto3 path prints `statusReasons` and recreates a policy that is `CREATE_FAILED` on the next
-run. With Terraform, fix the `.cedar` file and `terraform apply` again. If the resource is tainted,
+Fix the `.cedar` file, merge, and deploy again. If the resource is tainted,
 Terraform replaces it.
 
 Also check the Gateway role. Without `bedrock-agentcore:GetPolicyEngine`, `AuthorizeAction` and
@@ -107,24 +107,23 @@ New roles and inline policies take a few seconds to become usable, and AgentCore
 on `CreateAgentRuntime` / `CreateGateway`.
 
 - Terraform waits 15 s (`time_sleep.iam`) after each role policy, before the dependent resource.
-  If you still hit it, run `terraform apply` again. It continues where it stopped.
-- boto3 retries IAM-looking errors (`AccessDenied`, `ValidationException` mentioning the role, ...)
-  with backoff for up to 2 minutes (`call_with_iam_retry` in `infra/boto3/common.py`). Re-running the
-  deploy is safe.
+  If you still hit it, run `deploy.yml` again. Terraform continues where it stopped.
 
-## arm64 wheels
+## Images
 
-AgentCore Runtime runs the zips on **Linux arm64, Python 3.12**. `scripts/build.py` installs
-dependencies with `--python-platform aarch64-manylinux2014 --python-version 3.12 --only-binary=:all:`.
+All workloads are linux/arm64 container images built in GitHub Actions ([10-ci-cd.md §3](10-ci-cd.md#3-how-the-images-are-built)).
+Problems usually show up in CI already, because every image is started and called before it can be pushed.
 
-- `No solution found` / "no wheels with a matching platform tag": a dependency (or one of its
-  dependencies) has no `manylinux aarch64` cp312 wheel. Pin a version that ships one, or replace it.
-- Runtime log shows `invalid ELF header`, `cannot open shared object file` or a pydantic-core import
-  error: the zip has wheels for the wrong platform, usually from a manual `pip install` into the
-  folder. Rebuild with `uv run python scripts/build.py`.
-- Paths in the zip must use forward slashes. `build.py` writes them that way on Windows too. Don't
-  re-zip `build/` with other tools.
-- `uv not found on PATH`: install uv (https://docs.astral.sh/uv/).
+- **Container check fails in CI** (`scripts/ci_image_checks.sh` prints the container logs): read the logs in
+  the job output. Typical causes: a missing file in the allow-list `Dockerfile.dockerignore`, or a new import
+  whose package isn't in `requirements.in`.
+- **Lock-file drift** (`pin_requirements.py --check` fails): run `uv run python scripts/pin_requirements.py`
+  after `uv lock`, and commit the `requirements.lock.txt` files.
+- **Deployed runtime doesn't start** although CI passed: check the runtime log group
+  (`/aws/bedrock-agentcore/runtimes/<id>-DEFAULT`) for an import error or a missing env var, and compare the
+  image tag Terraform applied with the one you meant to deploy.
+- Images are never built locally (decision 2026-11-07). If you must reproduce a build, use the same
+  `docker buildx build --platform linux/arm64 -f <Dockerfile> .` from the repo root on an arm64 machine.
 
 ## Port in use
 
@@ -140,31 +139,15 @@ uv run python scripts/run_local.py --gateway-url http://localhost:8765/mcp
 `run_local.py` reports a connection error or MCP startup timeout, check that the emulator is running
 and that the URL ends in `/mcp`.
 
-## Workshop Studio accounts
-
-Temporary event accounts (AWS Workshop Studio and similar) behave differently from your own account:
-
-- **Expiry.** Credentials last a few hours and the account is wiped at the end of the event. Destroy
-  before it ends if you care about a clean teardown. The account is removed either way.
-- **Expired credentials mid-deploy.** Refresh them, then re-run `terraform apply` or the boto3
-  deploy. Both continue from where they stopped (Terraform state / `infra/boto3/state.json`).
-- **Service and region restrictions.** SCPs may block some services, regions or actions (for example
-  Budgets, Cognito domains, AgentCore Policy, or Bedrock models outside the event's region). If a call
-  fails with an explicit deny from an SCP, you can't fix it inside the account. Use the allowed region,
-  or skip the optional piece (`enable_budget = false`).
-- **Model access** may be preconfigured for specific models only. Check with
-  `aws bedrock list-inference-profiles` first.
-- **Quotas** (for example AgentCore runtimes per account) may be lower than in a normal account.
-
 ## Other
 
 | Symptom | Fix |
 |---|---|
-| Terraform: `Missing .../dist/agent.zip` | Run `uv run python scripts/build.py` first. Terraform doesn't build artifacts |
+| Terraform: "Error acquiring the state lock" | Another plan/apply holds the `.tflock` file (or a cancelled run left it). Wait, or after checking no run is active, `terraform force-unlock <id>` locally with `personal` |
 | Terraform: `ResourceAlreadyExistsException` for `/aws/bedrock-agentcore/runtimes/...-DEFAULT` | The service created the log group first. `terraform import module.agent_runtime.aws_cloudwatch_log_group.runtime <name>` (or `module.mcp_runtime...`), then apply |
-| Return demo says 1042 isn't eligible any more | A return was already created. Re-seed with `uv run python scripts/seed_data.py --region <region>` (`demo_access.py` re-seeds unless you pass `--no-reseed`). Locally, restart the emulator (memory store) |
+| Return demo says 1042 isn't eligible any more | A return was already created. Re-seed with `uv run python scripts/seed_data.py --region <region> --prefix shopassist-<env>` (`demo_access.py` re-seeds unless you pass `--no-reseed`). Locally, restart the emulator (memory store) |
 | Agent log shows `blocked tool call <name>` (the model got "Tool '...' is blocked: no activated skill declares the MCP server ...") | Usually normal self-correction: the model called a tool before activating a skill. If it persists, the skill's `metadata.mcp-servers` is missing that server |
 | The agent doesn't use a newly uploaded skill | Skills load once per session. Use `--new-session` |
 | Gateway lists no `support___*` tools | The MCP runtime wasn't `READY` when the target was created, or the target's OAuth config is wrong. Check the target status, and re-sync with `aws bedrock-agentcore-control synchronize-gateway-targets` |
-| Cognito domain `shopassist-<account>` already taken | Domains are global. Change the prefix (Terraform `name_prefix`, boto3 `--prefix`) |
+| Cognito domain `shopassist-<env>-<account>` already taken | Domains are global. Change `name_prefix` in `envs/<env>.tfvars` |
 | `agent/app.py` run locally exits silently on the first message (Windows) | Set `PYTHONIOENCODING=utf-8`. Strands' error notes contain characters a cp1252 console can't print. See [11-chat-ui.md](11-chat-ui.md#troubleshooting) |

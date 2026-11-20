@@ -5,8 +5,8 @@
 #   Publishes the agent runtime's ARN and id, and the name of its log group.
 #
 # Where it fits
-#   The root main.tf writes runtime_arn to .deploy/outputs.json as agent_runtime_arn, which is the
-#   address scripts/invoke_agent.py calls.
+#   The root main.tf writes runtime_arn to .deploy/<env>/outputs.json as agent_runtime_arn, which is
+#   the address scripts/invoke_agent.py calls.
 #
 # Step by step
 #   1. Report the runtime ARN and id once the runtime is created.
@@ -17,5 +17,3 @@
 # =====================================================================================================
 
 output "runtime_arn" { value = aws_bedrockagentcore_agent_runtime.this.agent_runtime_arn }
-output "runtime_id" { value = aws_bedrockagentcore_agent_runtime.this.agent_runtime_id }
-output "log_group" { value = terraform_data.log_group.output.name }

@@ -4,29 +4,35 @@
 # What this file does
 #   Creates the Cognito user pool (the login service) with its demo users alice, bob and carol, two
 #   app clients (one for people, one for machines), and an AgentCore Identity credential provider that
-#   lets the Gateway fetch its own machine token.
+#   lets the Gateway fetch its own machine token. Optionally (enable_entra) it also adds Microsoft
+#   Entra ID as a second way to sign in and hooks the role-mapper Lambda into token issuing.
 #
 # Where it fits
 #   Called by the root main.tf (module "identity"). Its outputs are used by:
 #     - agent_runtime and gateway: to check incoming login tokens (discovery URL, allowed client ids);
 #     - mcp_runtime: to accept only machine tokens from the M2M client;
 #     - gateway: the credential provider, used when the Gateway calls the support server;
-#     - root main.tf: the demo users' passwords, written to .deploy/users.json.
+#     - root main.tf: the demo users' passwords, written to .deploy/<env>/users.json, and the ids and
+#       addresses written to .deploy/<env>/outputs.json.
 #
 # Step by step
 #   1. Create the user pool <prefix>-pool, where only an administrator (Terraform) can create users.
-#   2. Give it a domain, which hosts the /oauth2/token address that hands out tokens.
+#      With Entra on, attach the role mapper as the pre-token-generation trigger.
+#   2. Give it a domain, which hosts the sign-in pages and the /oauth2/token address.
 #   3. Define the custom permission (scope) shopassist/invoke.
 #   4. Create the M2M app client (has a secret, used by the Gateway and local tests).
-#   5. Create the users app client (no secret, used by people logging in from the CLI).
+#   5. Create the users app client (no secret, used by people signing in from the CLI or the local
+#      chat page, with a password or through the browser).
+#      5a. Only with enable_entra: register Entra ID as an OIDC identity provider ("EntraID").
+#      5b. Only with enable_entra: allow this pool to call the role-mapper Lambda.
 #   6. Create the groups Group-ShopAssist-Admin and Group-ShopAssist-Viewer.
 #   7. Generate a random password per demo user, create alice, bob and carol, and put alice in
 #      Group-ShopAssist-Admin and bob in Group-ShopAssist-Viewer (carol gets no group).
 #   8. Register the M2M client with AgentCore Identity as an OAuth2 credential provider.
 #
 # Who flows through which client (Cognito is the single OAuth2 authorization server for the PoC)
-#   - users client : humans (alice/bob/carol) -> agent runtime -> gateway (the same user token is
-#                    passed along, "token passthrough")
+#   - users client : humans (alice/bob/carol, and Entra users when enabled) -> agent runtime ->
+#                    gateway (the same user token is passed along, "token passthrough")
 #   - m2m client   : gateway -> support MCP runtime (the Gateway logs in as itself) and local dev
 #
 # Key terms
@@ -37,12 +43,18 @@
 #   Scope: a named permission written into a token, here "shopassist/invoke".
 #   Discovery URL: a public web address that tells other services how to check this pool's tokens.
 #   Credential provider: an AgentCore Identity entry that stores a client secret and fetches tokens.
+#   OIDC (OpenID Connect) identity provider: an outside login service (here Entra ID) that Cognito
+#     trusts to say who a user is ("federation").
+#   PKCE (Proof Key for Code Exchange): a safety step for browser sign-in by apps that can't keep a
+#     secret, so a stolen sign-in code is useless.
 # =====================================================================================================
 
 # Values built from the pool id and region, shared by several resources and outputs.
-#   domain:        the Cognito domain prefix, unique per account.
+#   domain:        the Cognito domain prefix, e.g. shopassist-prod-<account>. It stays the same across
+#                  destroy and redeploy, so the Entra redirect address only has to be registered once.
 #   discovery_url: where the Runtime and Gateway authorizers learn how to verify tokens.
 #   token_url:     where the M2M client (and the scripts) exchange the id and secret for a token.
+#   domain_url:    the base address of Cognito's sign-in pages and token endpoint for this pool.
 #   groups:        the two Cognito groups the access rules use.
 locals {
   domain        = "${var.name_prefix}-${var.account_id}"
@@ -96,7 +108,8 @@ resource "aws_cognito_user_pool" "this" {
     }
   }
 
-  # The role mapper runs just before Cognito issues tokens (only when Entra is on).
+  # The role mapper runs just before Cognito issues tokens (only when Entra is on). A `dynamic` block
+  # with an empty list writes no block at all, so with Entra off the pool has no trigger.
   dynamic "lambda_config" {
     for_each = var.enable_entra ? [1] : []
     content {
@@ -108,6 +121,9 @@ resource "aws_cognito_user_pool" "this" {
   }
 }
 
+# Step 2: the pool's Cognito-hosted domain https://<domain>.auth.<region>.amazoncognito.com. It
+# serves the managed sign-in page (browser sign-in, "Sign in with Entra") and /oauth2/token, where
+# the M2M client and the scripts get their tokens.
 resource "aws_cognito_user_pool_domain" "this" {
   domain       = local.domain
   user_pool_id = aws_cognito_user_pool.this.id
@@ -143,9 +159,10 @@ resource "aws_cognito_user_pool_client" "m2m" {
 }
 
 # Step 5: the users client. scripts/invoke_agent.py logs in as alice, bob or carol with a username
-# and password through this client and sends the resulting token to the agent.
-# Public client for humans: no secret, so a CLI can do USER_PASSWORD_AUTH directly.
+# and password through this client and sends the resulting token to the agent; the browser sign-in
+# (chat page or `invoke_agent.py --login`) goes through it as well.
 # Its access token carries cognito:groups, which the runtime authorizer and Cedar check.
+# depends_on: the "EntraID" provider must exist before the client may list it.
 resource "aws_cognito_user_pool_client" "users" {
   name         = "${var.name_prefix}-users"
   user_pool_id = aws_cognito_user_pool.this.id
@@ -166,8 +183,11 @@ resource "aws_cognito_user_pool_client" "users" {
   logout_urls                          = var.logout_urls
   supported_identity_providers         = var.enable_entra ? ["COGNITO", "EntraID"] : ["COGNITO"]
 
-  # Short-lived access tokens: removing someone from an AD group takes effect within 15 minutes
-  # (the next refresh re-runs the role mapper with what Entra says now).
+  # Short lifetimes bound how long a removed right survives. Access and ID tokens last 15 minutes,
+  # refresh tokens 8 hours. A refresh re-runs the role mapper, but on the attributes Cognito stored at
+  # the user's last Entra sign-in (Cognito only re-reads Entra at sign-in). So removing someone from
+  # an AD group takes full effect at their next Entra sign-in, at the latest when the 8-hour refresh
+  # token runs out. For an immediate cut-off, sign the user out globally (documented runbook step).
   access_token_validity  = 15
   id_token_validity      = 15
   refresh_token_validity = 8
@@ -185,10 +205,13 @@ resource "aws_cognito_user_pool_client" "users" {
 
 # ---------------------------------------------------------------- Entra ID federation (enable_entra)
 
-# Entra ID as an OpenID Connect identity provider. Users choose "EntraID" on the sign-in page, sign in
-# at Microsoft, and come back with an ID token whose claims Cognito copies into the user's attributes.
-#   roles -> custom:entra_roles (app roles assigned through AD groups), email, name
-#   username = Entra's stable object id (sub), so a renamed user keeps the same Cognito profile.
+# Step 5a (only with enable_entra): Entra ID as an OpenID Connect identity provider. Users choose
+# "EntraID" on the sign-in page, sign in at Microsoft, and come back with an ID token whose claims
+# Cognito copies into the user's attributes (attribute_mapping, Cognito name = Entra claim):
+#   roles  -> custom:entra_roles  (app roles assigned through AD groups, "roles" mode)
+#   groups -> custom:entra_groups (group object ids, "groups" mode), plus email and name
+#   username = Entra's "sub" claim, a stable id that does not change when the user is renamed.
+# The client secret comes from the GitHub environment secret, never from a file.
 resource "aws_cognito_identity_provider" "entra" {
   count = var.enable_entra ? 1 : 0
 
@@ -213,7 +236,8 @@ resource "aws_cognito_identity_provider" "entra" {
   }
 }
 
-# Let Cognito (only this user pool) invoke the role mapper.
+# Step 5b (only with enable_entra): let Cognito invoke the role mapper, and only on behalf of this
+# user pool (source_arn), so no other pool can use the function.
 resource "aws_lambda_permission" "role_mapper" {
   count = var.enable_entra ? 1 : 0
 

@@ -8,7 +8,16 @@
 #
 # Where it fits
 #   Trivy reads it through TRIVY_IGNOREFILE. Everything not listed here still fails the build when it
-#   is HIGH/CRITICAL and has a fix available.
+#   is HIGH/CRITICAL and has a fix available. The entry below concerns the Lambda base image, so it
+#   applies to the orders_lambda and role_mapper images.
+#
+# Key terms
+#   Trivy: an open-source scanner that compares an image's packages with public vulnerability lists.
+#   CVE (Common Vulnerabilities and Exposures): the public id of one known vulnerability.
+#   statement: the human-readable reason for accepting the finding.
+#   expired_at: after this date the entry stops counting and the finding fails the build again.
+#   Lambda Runtime Interface Emulator (RIE): a test helper in AWS's Lambda images for running a
+#     function outside AWS.
 # =====================================================================================================
 vulnerabilities:
   - id: CVE-2026-111943

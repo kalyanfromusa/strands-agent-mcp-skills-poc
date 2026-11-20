@@ -7,11 +7,13 @@
 #
 # Where it fits
 #   Shown on screen after `apply`, and available later with `terraform output`. The same values are
-#   also written to .deploy/outputs.json (see main.tf), which is what the scripts actually read.
+#   also written to .deploy/<env>/outputs.json (see main.tf), which is what the scripts actually read.
+#   (The pipeline never prints the full apply output, only a summary, so in CI these are not shown.)
 #
 # Step by step
-#   1. Repeat each key of .deploy/outputs.json as a Terraform output.
-#   2. Print the full paths of .deploy/outputs.json and .deploy/users.json.
+#   1. Repeat most keys of .deploy/<env>/outputs.json as Terraform outputs (cognito_domain_url and
+#      entra_enabled are only in the file).
+#   2. Print the full paths of .deploy/<env>/outputs.json and .deploy/<env>/users.json.
 #   3. Print the two smoke-test commands to run from the repository root.
 #
 # Key terms
@@ -19,7 +21,8 @@
 #   Smoke test: a quick end-to-end check that the deployment works at all.
 # =====================================================================================================
 
-# Same keys as .deploy/outputs.json (design.md section 6).
+# Same keys as .deploy/<env>/outputs.json (design.md section 6); see main.tf step 9a for what each is.
+# deployed_by is a fixed marker saying which tool created the stack (only Terraform does now).
 output "region" { value = var.region }
 output "account_id" { value = local.account_id }
 output "environment" { value = var.environment }
@@ -36,15 +39,16 @@ output "cognito_token_url" { value = module.identity.token_url }
 output "oauth_provider_name" { value = module.identity.oauth_provider_name }
 output "cognito_users_client_id" { value = module.identity.users_client_id }
 output "policy_engine_id" { value = module.gateway.policy_engine_id }
+output "memory_id" { value = module.memory.memory_id }
 output "deployed_by" { value = "terraform" }
 
-# Full path of .deploy/outputs.json on your computer.
+# Full path of .deploy/<env>/outputs.json on the computer that ran Terraform.
 output "deploy_outputs_file" {
   description = "Where the contract file was written."
   value       = abspath(local_file.deploy_outputs.filename)
 }
 
-# Full path of .deploy/users.json. Only the path is printed, never the passwords inside it.
+# Full path of .deploy/<env>/users.json. Only the path is printed, never the passwords inside it.
 output "users_file" {
   description = "Demo user credentials (alice/bob/carol)."
   value       = abspath(local_sensitive_file.demo_users.filename)

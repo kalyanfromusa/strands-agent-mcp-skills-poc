@@ -21,6 +21,7 @@
 #   Thumbprint: no longer needed; AWS validates GitHub's certificate chain itself.
 # =====================================================================================================
 
+# GitHub's token issuer address, shared by the create and the look-up paths below.
 locals {
   github_oidc_url = "https://token.actions.githubusercontent.com"
 }

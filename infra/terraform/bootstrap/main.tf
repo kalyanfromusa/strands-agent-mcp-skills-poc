@@ -2,8 +2,9 @@
 # bootstrap/main.tf: the S3 bucket that stores Terraform's state for every other ShopAssist stack
 #
 # What this file does
-#   Creates one private, encrypted, versioned S3 bucket, shopassist-tfstate-<account>-<region>. The
-#   `platform` stack and the main stack (each environment) keep their state files in it.
+#   Creates one private, encrypted S3 bucket without versioning (Suspended, see step 3),
+#   shopassist-tfstate-<account>-<region>. The `platform` stack and the main stack (each environment)
+#   keep their state files in it.
 #
 # Where it fits
 #   It is the first thing you apply, once per AWS account, and the last thing you destroy. It has to
@@ -11,7 +12,9 @@
 #   file (infra/terraform/bootstrap/terraform.tfstate, git-ignored). That file is tiny and easy to
 #   recreate with `terraform import` if it is ever lost.
 #
-#   Order: bootstrap -> platform -> main (envs/prod). Destroy in the reverse order.
+#   Order: bootstrap -> platform -> main (envs/prod). Destroy in the reverse order. The destroy.yml
+#   workflow removes only a main stack; this bucket and the platform stay (they cost next to nothing)
+#   until scripts/destroy_everything.sh removes the foundation too.
 #
 # Step by step
 #   1. Look up the account id (part of the bucket name, which must be globally unique).
@@ -19,7 +22,8 @@
 #   3. Versioning is OFF (decided 2026-11-06: no S3 versioning). The bucket was first created with it
 #      on, and S3 can't return a bucket to "never versioned", so it is set to Suspended: new writes keep
 #      no old copies. Trade-off: a corrupted state file can't be restored from an older version.
-#   4. Encrypt every object at rest (SSE-S3) and block every form of public access.
+#   4. Encrypt every object at rest (SSE-S3), block every form of public access, and switch off
+#      per-object ACLs (access control lists).
 #   5. A bucket policy that refuses any request not sent over HTTPS (TLS).
 #   6. A lifecycle rule that cleans up unfinished uploads and any old copies left from before step 3.
 #
@@ -29,11 +33,15 @@
 #   Backend: where Terraform keeps state. "S3 backend" = in this bucket, with a lock file (.tflock)
 #     next to each state file, so two runs can't change the same stack at once (use_lockfile = true).
 #   Versioning: S3 keeping every previous copy of a file instead of overwriting it (switched off here).
+#   SSE-S3 (server-side encryption with S3-managed keys): S3 encrypts each file on disk for free.
+#   checkov: a security scanner run in CI; the "#checkov:skip" lines below record accepted findings.
 # =====================================================================================================
 
 # Step 1: which account are we in?
 data "aws_caller_identity" "current" {}
 
+# The bucket name. S3 bucket names are global across all AWS customers, so the account id and region
+# make it unique; the other stacks rebuild the same name from the same pattern.
 locals {
   bucket_name = "${var.name_prefix}-tfstate-${data.aws_caller_identity.current.account_id}-${var.region}"
 }
@@ -86,7 +94,9 @@ resource "aws_s3_bucket_ownership_controls" "state" {
   }
 }
 
-# Step 5: refuse plain-HTTP requests. "aws:SecureTransport = false" means "not sent over TLS".
+# Step 5: refuse plain-HTTP requests. "aws:SecureTransport = false" means "not sent over TLS"
+# (TLS, Transport Layer Security, is the encryption behind https). The policy document is built here,
+# then attached to the bucket by the resource below it.
 data "aws_iam_policy_document" "tls_only" {
   statement {
     sid     = "DenyInsecureTransport"
@@ -113,7 +123,8 @@ resource "aws_s3_bucket_policy" "state" {
   depends_on = [aws_s3_bucket_public_access_block.state]
 }
 
-# Step 6: housekeeping. Unfinished uploads go after 1 day; old copies from before versioning was suspended go after 1 day.
+# Step 6: housekeeping. Unfinished uploads are removed after 1 day, and so are old copies left over
+# from before versioning was suspended. depends_on: S3 wants the versioning setting in place first.
 resource "aws_s3_bucket_lifecycle_configuration" "state" {
   bucket = aws_s3_bucket.state.id
 

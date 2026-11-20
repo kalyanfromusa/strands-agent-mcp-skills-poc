@@ -1,5 +1,25 @@
-# Settings of the dev environment (committed: no secrets here; secrets come from TF_VAR_* in the pipeline).
-# image_tag is NOT set here: the pipeline passes -var image_tag=<git sha> on every plan/apply.
+# =====================================================================================================
+# envs/dev.tfvars: the settings of the dev environment
+#
+# What this file does
+#   Sets the main stack's variables for dev (see ../variables.tf for what each one means).
+#
+# Where it fits
+#   Passed with -var-file=envs/dev.tfvars by the pipeline (ci.yml, deploy.yml, destroy.yml) or by
+#   hand. Committed to git because it holds no secrets: secrets come from TF_VAR_* environment
+#   variables (GitHub environment secrets). dev is defined but not deployed today (the pipeline blocks it unless DEPLOY_DEV = true).
+#
+# Step by step
+#   1. Terraform loads the defaults in ../variables.tf.
+#   2. The values below replace them.
+#   3. image_tag is NOT set here: the pipeline passes -var image_tag=<git sha> on every plan/apply.
+#   4. Entra ID sign-in is not switched on here (enable_entra stays false, its default).
+#
+# Key terms
+#   tfvars file: a list of name = value settings for Terraform variables.
+#   model_id: the Bedrock model (Claude Haiku 4.5 inference profile). Changing it is a one-line edit.
+#   seed_data: load the demo orders after deploying. enable_budget: the optional cost alert (off).
+# =====================================================================================================
 environment        = "dev"
 region             = "us-east-1"
 name_prefix        = "shopassist"

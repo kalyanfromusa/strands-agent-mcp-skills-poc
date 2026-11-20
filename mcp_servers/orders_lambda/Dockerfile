@@ -18,7 +18,8 @@
 #   2. Copy handler.py and common/ into the task root, /var/task (LAMBDA_TASK_ROOT).
 #   3. Tell Lambda which function to call: CMD ["handler.lambda_handler"].
 #
-# Build context: the REPO ROOT (mcp_servers/common is outside this folder), with -f:
+# Build context: the REPO ROOT (mcp_servers/common is outside this folder), with -f. The pipeline runs
+# the equivalent of this command; it's shown for reference only (images are built only in CI):
 #   docker buildx build --platform linux/arm64 --provenance=false -f mcp_servers/orders_lambda/Dockerfile .
 #   mcp_servers/orders_lambda/Dockerfile.dockerignore limits what the root context sends.
 #
@@ -26,10 +27,19 @@
 #   Lambda base image: an AWS-maintained image that behaves exactly like the managed Python runtime.
 #   Task root: the folder Lambda imports the handler from.
 #   Non-root: Lambda runs the code as an unprivileged user by itself, so no USER line is needed.
+#   RIE (Runtime Interface Emulator): a small test server inside the base image that lets CI call the
+#     function without AWS (scripts/ci_image_checks.sh). One accepted Trivy finding in it is listed,
+#     with a reason and an expiry date, in .trivyignore.yaml.
+#   ECR (Elastic Container Registry): AWS's private storage for container images.
+#   SHA: the 40-character fingerprint of a git commit, used as the image tag.
 # =====================================================================================================
 
 # Step 1: the official Lambda Python 3.12 image for arm64 (AWS Graviton).
 FROM --platform=linux/arm64 public.ecr.aws/lambda/python:3.12-arm64
+# Step 1b: install the fixed rpm and sqlite packages (Trivy HIGH findings) that the base image lacks.
+# AL2023 locks an image to its release snapshot, so --releasever=latest is needed to see the fixes.
+# Remove this line once AWS ships a base image that already contains them.
+RUN dnf upgrade -y --releasever=latest rpm rpm-libs sqlite-libs && dnf clean all
 
 # Step 2: the handler and the shared package, flat in the task root (import `common.store` works).
 COPY mcp_servers/orders_lambda/handler.py ${LAMBDA_TASK_ROOT}/

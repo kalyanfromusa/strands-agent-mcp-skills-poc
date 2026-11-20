@@ -1,0 +1,1626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShopAssist PoC: Architecture Review Pack</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1d232b; --muted: #5a6573; --line: #d9dee5;
+    --accent: #3b4fd8; --accent-soft: #e9ecff; --ok: #1f7a4a; --ok-soft: #e4f4ea;
+    --warn: #8a5a00; --warn-soft: #fff4dc; --risk: #a3262b; --risk-soft: #fde8e8;
+    --code: #f0f2f5; --radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  html { font-size: 15px; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font-family: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+         line-height: 1.55; }
+  header { background: #161b33; color: #fff; padding: 28px 32px 22px; }
+  header h1 { margin: 0 0 6px; font-size: 1.7rem; font-weight: 600; }
+  header p { margin: 0; color: #c9cee8; max-width: 960px; }
+  header .meta { margin-top: 12px; font-size: .85rem; color: #9aa3cf; }
+  main { max-width: 1240px; margin: 0 auto; padding: 0 24px 48px; }
+
+  /* CSS-only tabs: radio inputs are visually hidden but stay keyboard-focusable (arrow keys switch tabs). */
+  .tabs > input[type="radio"] { position: absolute; opacity: 0; width: 1px; height: 1px; overflow: hidden; }
+  .tabs nav { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 4px;
+              background: var(--bg); padding: 14px 0 0; border-bottom: 1px solid var(--line); }
+  .tabs nav label { cursor: pointer; padding: 9px 14px; border: 1px solid transparent; border-bottom: none;
+                    border-radius: var(--radius) var(--radius) 0 0; color: var(--muted); font-weight: 500;
+                    font-size: .93rem; user-select: none; }
+  .tabs nav label:hover { color: var(--ink); background: #eceef2; }
+  .tabs .panel { display: none; background: var(--panel); border: 1px solid var(--line); border-top: none;
+                 border-radius: 0 0 var(--radius) var(--radius); padding: 26px 30px 34px; }
+
+  #t-overview:checked ~ nav label[for="t-overview"],
+  #t-arch:checked ~ nav label[for="t-arch"],
+  #t-agent:checked ~ nav label[for="t-agent"],
+  #t-security:checked ~ nav label[for="t-security"],
+  #t-data:checked ~ nav label[for="t-data"],
+  #t-deploy:checked ~ nav label[for="t-deploy"],
+  #t-cicd:checked ~ nav label[for="t-cicd"],
+  #t-cost:checked ~ nav label[for="t-cost"],
+  #t-extend:checked ~ nav label[for="t-extend"],
+  #t-testing:checked ~ nav label[for="t-testing"],
+  #t-review:checked ~ nav label[for="t-review"] {
+    background: var(--panel); color: var(--accent); border-color: var(--line);
+    box-shadow: inset 0 3px 0 var(--accent); margin-bottom: -1px; }
+
+  #t-overview:focus-visible ~ nav label[for="t-overview"],
+  #t-arch:focus-visible ~ nav label[for="t-arch"],
+  #t-agent:focus-visible ~ nav label[for="t-agent"],
+  #t-security:focus-visible ~ nav label[for="t-security"],
+  #t-data:focus-visible ~ nav label[for="t-data"],
+  #t-deploy:focus-visible ~ nav label[for="t-deploy"],
+  #t-cicd:focus-visible ~ nav label[for="t-cicd"],
+  #t-cost:focus-visible ~ nav label[for="t-cost"],
+  #t-extend:focus-visible ~ nav label[for="t-extend"],
+  #t-testing:focus-visible ~ nav label[for="t-testing"],
+  #t-review:focus-visible ~ nav label[for="t-review"] { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  #t-overview:checked ~ .panels #p-overview,
+  #t-arch:checked ~ .panels #p-arch,
+  #t-agent:checked ~ .panels #p-agent,
+  #t-security:checked ~ .panels #p-security,
+  #t-data:checked ~ .panels #p-data,
+  #t-deploy:checked ~ .panels #p-deploy,
+  #t-cicd:checked ~ .panels #p-cicd,
+  #t-cost:checked ~ .panels #p-cost,
+  #t-extend:checked ~ .panels #p-extend,
+  #t-testing:checked ~ .panels #p-testing,
+  #t-review:checked ~ .panels #p-review { display: block; }
+
+  h2 { font-size: 1.35rem; margin: 0 0 4px; }
+  h2 + .lead { margin-top: 0; }
+  h3 { font-size: 1.08rem; margin: 28px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  h4 { font-size: .98rem; margin: 18px 0 6px; }
+  .lead { color: var(--muted); font-size: 1.02rem; max-width: 980px; }
+  .src { font-size: .8rem; color: var(--muted); margin: 0 0 18px; }
+  .src code { font-size: .78rem; }
+  p, li { max-width: 1000px; }
+  code { font-family: Consolas, "Cascadia Mono", Menlo, monospace; font-size: .86em; background: var(--code);
+         padding: 1px 5px; border-radius: 4px; }
+  pre { background: #10142a; color: #e3e7ff; padding: 14px 16px; border-radius: var(--radius); overflow-x: auto;
+        font-size: .84rem; line-height: 1.45; }
+  pre code { background: none; padding: 0; color: inherit; }
+
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 18px; font-size: .9rem; }
+  th, td { text-align: left; vertical-align: top; padding: 7px 10px; border: 1px solid var(--line); }
+  th { background: #f0f2f6; font-weight: 600; }
+  tbody tr:nth-child(even) td { background: #fafbfc; }
+  .tbl-wrap { overflow-x: auto; }
+
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); margin: 14px 0; }
+  .card { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; background: #fcfcfd; }
+  .card h4 { margin-top: 0; }
+  .card p { margin: 4px 0 0; font-size: .92rem; color: var(--muted); }
+  .kpi { font-size: 1.6rem; font-weight: 600; color: var(--accent); line-height: 1.1; }
+
+  .callout { border-left: 4px solid var(--accent); background: var(--accent-soft); padding: 10px 14px;
+             border-radius: 0 var(--radius) var(--radius) 0; margin: 14px 0; }
+  .callout.ok { border-color: var(--ok); background: var(--ok-soft); }
+  .callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+  .callout.risk { border-color: var(--risk); background: var(--risk-soft); }
+  .callout p { margin: 4px 0; }
+
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .78rem; font-weight: 600; }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.risk { background: var(--risk-soft); color: var(--risk); }
+  .pill.info { background: var(--accent-soft); color: var(--accent); }
+
+  ol.flow { counter-reset: step; list-style: none; padding-left: 0; }
+  ol.flow li { counter-increment: step; position: relative; padding: 6px 0 6px 40px; border-bottom: 1px dashed var(--line); }
+  ol.flow li::before { content: counter(step); position: absolute; left: 0; top: 6px; width: 26px; height: 26px;
+                       border-radius: 50%; background: var(--accent); color: #fff; font-size: .8rem;
+                       display: flex; align-items: center; justify-content: center; font-weight: 600; }
+
+  .layers { display: grid; gap: 8px; margin: 14px 0; }
+  .layer { display: grid; grid-template-columns: 44px 1fr; align-items: stretch; border: 1px solid var(--line);
+           border-radius: var(--radius); overflow: hidden; }
+  .layer .n { background: #161b33; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 600; }
+  .layer .b { padding: 8px 12px; font-size: .92rem; }
+  .layer.soft .n { background: #8d95b8; }
+
+  figure { margin: 16px 0; }
+  figure svg { width: 100%; height: auto; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
+  figcaption { font-size: .82rem; color: var(--muted); margin-top: 6px; }
+
+  details { border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 14px; margin: 10px 0; background: #fcfcfd; }
+  details summary { cursor: pointer; font-weight: 600; }
+  .check li { margin: 4px 0; }
+  footer { max-width: 1240px; margin: 0 auto; padding: 0 24px 30px; color: var(--muted); font-size: .8rem; }
+
+  @media print {
+    .tabs nav { display: none; }
+    .tabs .panel { display: block !important; border: none; page-break-after: always; padding: 0 0 20px; }
+    header { background: none; color: #000; }
+    header p, header .meta { color: #333; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ShopAssist PoC: Architecture Review Pack</h1>
+  <p>A generic Strands agent on Amazon Bedrock AgentCore whose behaviour comes from <code>SKILL.md</code> files in S3
+     and whose data and rules come from MCP tools behind an AgentCore Gateway with Cedar policy enforcement.
+     This pack condenses <code>docs/01</code> to <code>docs/11</code> plus the pending CI/CD patch for a technical architecture review.</p>
+  <div class="meta">Source: <code>docs/*.md</code> in <code>strands-skills-mcp-poc</code> · Compiled 2026-10-30 · Tabs work without JavaScript; print view shows all sections</div>
+</header>
+
+<main>
+<div class="tabs">
+  <input type="radio" name="tab" id="t-overview" checked>
+  <input type="radio" name="tab" id="t-arch">
+  <input type="radio" name="tab" id="t-agent">
+  <input type="radio" name="tab" id="t-security">
+  <input type="radio" name="tab" id="t-data">
+  <input type="radio" name="tab" id="t-deploy">
+  <input type="radio" name="tab" id="t-cicd">
+  <input type="radio" name="tab" id="t-cost">
+  <input type="radio" name="tab" id="t-extend">
+  <input type="radio" name="tab" id="t-testing">
+  <input type="radio" name="tab" id="t-review">
+
+  <nav aria-label="Review sections">
+    <label for="t-overview">Overview</label>
+    <label for="t-arch">Architecture</label>
+    <label for="t-agent">Agent &amp; Skills</label>
+    <label for="t-security">Security &amp; Access</label>
+    <label for="t-data">Data &amp; Ops</label>
+    <label for="t-deploy">Deployment</label>
+    <label for="t-cicd">CI/CD</label>
+    <label for="t-cost">Cost</label>
+    <label for="t-extend">Extensibility</label>
+    <label for="t-testing">Testing</label>
+    <label for="t-review">Risks &amp; Review</label>
+  </nav>
+
+  <div class="panels">
+
+  <!-- ===================================================== OVERVIEW -->
+  <section class="panel" id="p-overview" aria-labelledby="h-overview">
+    <h2 id="h-overview">Overview</h2>
+    <p class="lead">ShopAssist is a customer-support assistant for a fictional online store. The PoC's real subject is the
+       architecture: a domain-free agent, skills as runtime-loaded procedures, and access control enforced by AgentCore rather than by the model.</p>
+    <p class="src">Source: <code>docs/01-use-case.md</code></p>
+
+    <div class="grid">
+      <div class="card"><div class="kpi">0</div><h4>Domain logic in agent code</h4><p>Behaviour comes from 3 skills in S3; data and rules from 7 MCP tools.</p></div>
+      <div class="card"><div class="kpi">4 + 1</div><h4>Access-control layers</h4><p>Four enforced by AgentCore (JWT, passthrough, Gateway JWT, Cedar), one soft layer in skills.</p></div>
+      <div class="card"><div class="kpi">2</div><h4>IaC paths</h4><p>Same resource graph in Terraform and plain boto3, same output contract.</p></div>
+      <div class="card"><div class="kpi">~$1–9</div><h4>Monthly, illustrative</h4><p>All on-demand. Bedrock tokens dominate. One-command teardown.</p></div>
+    </div>
+
+    <h3>Request types</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Request</th><th>Example</th><th>What the assistant needs</th></tr></thead>
+      <tbody>
+        <tr><td>Order status</td><td>"Where is order 1042?"</td><td>Order lookup, carrier and tracking number</td></tr>
+        <tr><td>Returns and refunds</td><td>"I want to return the headphones from 1042."</td><td>Return policy, eligibility check, a way to create the return</td></tr>
+        <tr><td>Support</td><td>"My parcel arrived damaged."</td><td>FAQ search, opening and looking up tickets</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Operator personas (access-control side)</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>User</th><th>Cognito group</th><th>Can use agent?</th><th>Tools</th></tr></thead>
+      <tbody>
+        <tr><td><code>alice</code></td><td><code>shop-admin</code></td><td><span class="pill ok">Yes</span></td><td>All 7</td></tr>
+        <tr><td><code>bob</code></td><td><code>shop-viewer</code></td><td><span class="pill ok">Yes</span></td><td>5 read-only: <code>get_order</code>, <code>list_customer_orders</code>, <code>check_return_eligibility</code>, <code>get_ticket</code>, <code>search_faq</code></td></tr>
+        <tr><td><code>carol</code></td><td>none</td><td><span class="pill risk">No</span></td><td>Rejected at the Runtime JWT authorizer before any agent code runs</td></tr>
+      </tbody>
+    </table></div>
+    <p>Customer ids (<code>C001</code>–<code>C003</code>) are a separate concept from operators. The customer id is whatever the user types; it is <em>not</em> bound to the caller (see Risks).</p>
+
+    <h3>What the PoC is designed to demonstrate</h3>
+    <ul>
+      <li><strong>Generic-agent pattern.</strong> Adding a skill changes behaviour with no code change and no new agent zip.</li>
+      <li><strong>Rules live in tools, not prompts.</strong> Return eligibility is enforced server-side; <code>create_return</code> re-checks before writing.</li>
+      <li><strong>Per-user access outside the agent.</strong> One agent, one Gateway, three users, three outcomes. A direct Gateway call with bob's token to <code>create_return</code> is denied.</li>
+      <li><strong>Broad AgentCore coverage.</strong> Runtime (HTTP agent + MCP server), Gateway (Lambda + MCP targets), Identity (OAuth2 provider), Policy (Cedar).</li>
+      <li><strong>Two delivery paths.</strong> Terraform and boto3, comparable side by side.</li>
+    </ul>
+
+    <h3>Key architectural decisions</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Decision</th><th>Rationale</th><th>Trade-off</th></tr></thead>
+      <tbody>
+        <tr><td>Skills loaded from S3 at cold start</td><td>Behaviour changes without redeploying code</td><td>Skills are fixed per session; changes need a new session</td></tr>
+        <tr><td>Hybrid skill→tool binding</td><td>Skills stay portable (plain names, declared servers); agent can block undeclared servers</td><td>Extra plugin (<code>SkillBinding</code>) with three hooks to maintain. A behaviour layer, not a security control: bob's clean "no permission" reply depends on its binding text, while Cedar does the enforcing</td></tr>
+        <tr><td>User token passthrough to Gateway</td><td>Gateway and Cedar see the real user, not the agent</td><td>Agent must plumb the token across Strands' MCP background thread</td></tr>
+        <tr><td>Cedar default-deny, viewer as allow-list</td><td>New tools are denied to viewers by default</td><td>Every new read-only tool needs a policy edit</td></tr>
+        <tr><td>Direct code (zip) deployment by default</td><td>No Docker/ECR for the PoC; cross-built arm64 wheels</td><td>Pure wheels only; optional container mode is designed but not wired in</td></tr>
+        <tr><td>One Strands <code>Agent</code> per microVM session</td><td>Conversation memory without a memory store</td><td>Memory is in-process only: lost on idle timeout or redeploy, capped at a 40-message window, nothing across sessions; calls serialised with a lock</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ===================================================== ARCHITECTURE -->
+  <section class="panel" id="p-arch" aria-labelledby="h-arch">
+    <h2 id="h-arch">Architecture</h2>
+    <p class="lead">Two AgentCore runtimes, one Gateway with two targets, Cognito for identity, AgentCore Identity for outbound M2M OAuth, and DynamoDB/S3 for state.</p>
+    <p class="src">Source: <code>docs/03-architecture.md</code> (contracts in <code>.kiro/specs/strands-poc/design.md</code>)</p>
+
+    <figure>
+      <svg viewBox="0 0 1100 480" role="img" aria-labelledby="svg-title svg-desc" font-family="Segoe UI, Arial, sans-serif" font-size="12">
+        <title id="svg-title">ShopAssist component diagram</title>
+        <desc id="svg-desc">The user CLI signs in to Cognito and calls the agent runtime with a bearer token. The agent syncs skills from S3, calls Bedrock, and calls the Gateway with the same token. The Gateway checks the JWT, applies Cedar policy, and routes to the orders Lambda target or the support MCP runtime target. The support target obtains an M2M token through AgentCore Identity.</desc>
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3b4566"/>
+          </marker>
+        </defs>
+        <style>
+          .bx { fill: #eef1ff; stroke: #3b4fd8; stroke-width: 1.4; rx: 6; }
+          .db { fill: #e8f5ee; stroke: #1f7a4a; stroke-width: 1.4; }
+          .ext { fill: #f4f4f6; stroke: #6b7280; stroke-width: 1.4; }
+          .grp { fill: #fafbff; stroke: #8d95b8; stroke-dasharray: 5 4; stroke-width: 1.2; }
+          .ln { stroke: #3b4566; stroke-width: 1.4; fill: none; marker-end: url(#arr); }
+          .dash { stroke-dasharray: 5 4; }
+          .t { fill: #1d232b; }
+          .tb { fill: #1d232b; font-weight: 600; }
+          .lb { fill: #5a6573; font-size: 11px; }
+          .gl { fill: #5a6573; font-size: 11px; font-weight: 600; }
+        </style>
+
+        <!-- Client and Cognito -->
+        <rect class="ext" x="20" y="205" width="140" height="60" rx="6"/>
+        <text class="tb" x="90" y="230" text-anchor="middle">User CLI</text>
+        <text class="t" x="90" y="247" text-anchor="middle">invoke_agent.py</text>
+
+        <rect class="ext" x="20" y="40" width="140" height="60" rx="6"/>
+        <text class="tb" x="90" y="65" text-anchor="middle">Cognito</text>
+        <text class="t" x="90" y="82" text-anchor="middle">shopassist-pool</text>
+
+        <!-- Agent runtime -->
+        <rect class="grp" x="195" y="165" width="210" height="130" rx="8"/>
+        <text class="gl" x="205" y="182">AgentCore Runtime (HTTP)</text>
+        <rect class="bx" x="210" y="192" width="180" height="88" rx="6"/>
+        <text class="tb" x="300" y="218" text-anchor="middle">shopassist_agent</text>
+        <text class="t" x="300" y="236" text-anchor="middle">Strands + AgentSkills</text>
+        <text class="t" x="300" y="252" text-anchor="middle">+ SkillBinding</text>
+        <text class="t" x="300" y="268" text-anchor="middle">+ MCPClient</text>
+
+        <rect class="db" x="210" y="40" width="180" height="60" rx="6"/>
+        <text class="tb" x="300" y="65" text-anchor="middle">S3 artifacts</text>
+        <text class="t" x="300" y="82" text-anchor="middle">skills/ + zips (versioned)</text>
+
+        <rect class="ext" x="210" y="380" width="180" height="60" rx="6"/>
+        <text class="tb" x="300" y="405" text-anchor="middle">Amazon Bedrock</text>
+        <text class="t" x="300" y="422" text-anchor="middle">Claude Haiku (inference profile)</text>
+
+        <!-- Gateway -->
+        <rect class="grp" x="445" y="115" width="295" height="250" rx="8"/>
+        <text class="gl" x="455" y="133">AgentCore Gateway: shopassist-gateway</text>
+        <rect class="bx" x="465" y="150" width="125" height="48" rx="6"/>
+        <text class="tb" x="527" y="171" text-anchor="middle">JWT authorizer</text>
+        <text class="t" x="527" y="187" text-anchor="middle">users + m2m clients</text>
+        <rect class="bx" x="465" y="285" width="125" height="52" rx="6"/>
+        <text class="tb" x="527" y="306" text-anchor="middle">AgentCore Policy</text>
+        <text class="t" x="527" y="323" text-anchor="middle">Cedar, ENFORCE</text>
+        <rect class="bx" x="620" y="150" width="105" height="48" rx="6"/>
+        <text class="tb" x="672" y="171" text-anchor="middle">target</text>
+        <text class="t" x="672" y="187" text-anchor="middle">orders</text>
+        <rect class="bx" x="620" y="285" width="105" height="52" rx="6"/>
+        <text class="tb" x="672" y="306" text-anchor="middle">target</text>
+        <text class="t" x="672" y="323" text-anchor="middle">support</text>
+
+        <!-- Backends -->
+        <rect class="ext" x="785" y="145" width="160" height="58" rx="6"/>
+        <text class="tb" x="865" y="169" text-anchor="middle">Lambda</text>
+        <text class="t" x="865" y="186" text-anchor="middle">shopassist-orders-tools</text>
+
+        <rect class="grp" x="775" y="255" width="180" height="100" rx="8"/>
+        <text class="gl" x="785" y="272">AgentCore Runtime (MCP)</text>
+        <rect class="bx" x="785" y="282" width="160" height="58" rx="6"/>
+        <text class="tb" x="865" y="306" text-anchor="middle">shopassist_support_mcp</text>
+        <text class="t" x="865" y="323" text-anchor="middle">FastMCP</text>
+
+        <rect class="db" x="975" y="145" width="110" height="58" rx="6"/>
+        <text class="tb" x="1030" y="169" text-anchor="middle">DynamoDB</text>
+        <text class="t" x="1030" y="186" text-anchor="middle">orders, returns</text>
+
+        <rect class="db" x="975" y="282" width="110" height="58" rx="6"/>
+        <text class="tb" x="1030" y="306" text-anchor="middle">DynamoDB</text>
+        <text class="t" x="1030" y="323" text-anchor="middle">tickets</text>
+
+        <rect class="bx" x="785" y="395" width="160" height="58" rx="6"/>
+        <text class="tb" x="865" y="419" text-anchor="middle">AgentCore Identity</text>
+        <text class="t" x="865" y="436" text-anchor="middle">shopassist-cognito</text>
+
+        <!-- Arrows -->
+        <path class="ln" d="M90,205 L90,102"/>
+        <text class="lb" x="96" y="155">USER_PASSWORD_AUTH</text>
+        <path class="ln" d="M160,235 L208,235"/>
+        <text class="lb" x="163" y="226">Bearer</text>
+        <path class="ln" d="M300,192 L300,102"/>
+        <text class="lb" x="306" y="135">cold start: sync skills/</text>
+        <path class="ln" d="M300,280 L300,378"/>
+        <text class="lb" x="306" y="340">Converse</text>
+        <path class="ln" d="M390,215 L463,180"/>
+        <text class="lb" x="392" y="187">MCP + same</text>
+        <text class="lb" x="392" y="200">user token</text>
+        <path class="ln" d="M527,198 L527,283"/>
+        <text class="lb" x="532" y="245">AuthorizeAction</text>
+        <path class="ln" d="M590,296 L618,190"/>
+        <path class="ln" d="M590,311 L618,311"/>
+        <path class="ln" d="M725,174 L783,174"/>
+        <text class="lb" x="728" y="166">IAM invoke</text>
+        <path class="ln" d="M725,311 L783,311"/>
+        <text class="lb" x="728" y="303">M2M JWT</text>
+        <path class="ln" d="M945,174 L973,174"/>
+        <path class="ln" d="M945,311 L973,311"/>
+        <path class="ln dash" d="M672,337 L672,424 L783,424"/>
+        <text class="lb" x="678" y="415">client_credentials</text>
+        <path class="ln dash" d="M865,453 L865,470 L12,470 L12,70 L18,70"/>
+        <text class="lb" x="420" y="465">token endpoint (Cognito domain must exist first)</text>
+      </svg>
+      <figcaption>Component view. Solid arrows are request paths; dashed arrows are the outbound M2M token path for the <code>support</code> target.</figcaption>
+    </figure>
+
+    <h3>Components</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Component</th><th>AWS service</th><th>Code</th><th>Role</th></tr></thead>
+      <tbody>
+        <tr><td>Client CLI</td><td>(local)</td><td><code>scripts/invoke_agent.py</code></td><td>Signs a demo user in to Cognito, calls the runtime HTTPS URL with the user's Bearer token</td></tr>
+        <tr><td>Agent <code>shopassist_agent</code></td><td>AgentCore Runtime, HTTP</td><td><code>agent/</code></td><td>Generic Strands agent: AgentSkills plugin, MCP client to Gateway, Bedrock model</td></tr>
+        <tr><td>Skills</td><td>S3 <code>…/skills/</code></td><td><code>skills/</code></td><td>Procedures read at cold start</td></tr>
+        <tr><td>Model</td><td>Amazon Bedrock</td><td>n/a</td><td><code>us.anthropic.claude-haiku-5-5</code> (inference profile, variable)</td></tr>
+        <tr><td>Gateway <code>shopassist-gateway</code></td><td>AgentCore Gateway, MCP, CUSTOM_JWT</td><td>n/a</td><td>One MCP endpoint over two targets with Cedar enforcement</td></tr>
+        <tr><td>Target <code>orders</code></td><td>Lambda python3.12 arm64</td><td><code>mcp_servers/orders_lambda/</code></td><td><code>get_order</code>, <code>list_customer_orders</code>, <code>check_return_eligibility</code>, <code>create_return</code></td></tr>
+        <tr><td>Target <code>support</code></td><td>AgentCore Runtime, MCP</td><td><code>mcp_servers/support_mcp/</code></td><td>FastMCP: <code>create_ticket</code>, <code>get_ticket</code>, <code>search_faq</code></td></tr>
+        <tr><td>Policy engine</td><td>AgentCore Policy</td><td><code>infra/policies/*.cedar</code></td><td>Default-deny, per-user tool filtering</td></tr>
+        <tr><td>Credential provider</td><td>AgentCore Identity</td><td>n/a</td><td>Holds M2M secret; Gateway fetches tokens for <code>support</code></td></tr>
+        <tr><td>User pool</td><td>Cognito</td><td>n/a</td><td>Users client, M2M client, groups, <code>shopassist/invoke</code> scope</td></tr>
+        <tr><td>Tables</td><td>DynamoDB on-demand</td><td><code>mcp_servers/common/store.py</code></td><td>orders (GSI <code>customer_id-index</code>), returns, tickets</td></tr>
+        <tr><td>Logs</td><td>CloudWatch Logs (7 days)</td><td>n/a</td><td>Runtime and Lambda log groups</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Request flow: "return the headphones from 1042"</h3>
+    <ol class="flow">
+      <li>CLI calls Cognito <code>InitiateAuth</code> (USER_PASSWORD_AUTH, users client) and receives an access token carrying <code>cognito:groups</code>.</li>
+      <li>CLI POSTs to <code>/runtimes/ARN/invocations?qualifier=DEFAULT</code> with Bearer token and a session-id header (≥33 chars) that selects the microVM.</li>
+      <li>Runtime JWT authorizer checks the client and the <code>cognito:groups</code> claim; the <code>Authorization</code> header is allowlisted through to the agent.</li>
+      <li>First call in the microVM: sync skills from S3, connect <code>MCPClient</code>, <code>tools/list</code> with the user's token (Cedar filters the list).</li>
+      <li>Bedrock Converse with system prompt, skill list and tools. Model calls <code>skills</code> → <code>returns-and-refunds</code>; agent returns instructions plus resolved Gateway tool names.</li>
+      <li>Model calls <code>orders___check_return_eligibility</code>; <code>SkillBinding</code> allows it because an active skill declares <code>orders</code>.</li>
+      <li>Gateway: JWT authorizer, Cedar <code>AuthorizeAction</code>, invoke Lambda with the tool name in client context.</li>
+      <li>Result returns through the Gateway to the model; final text goes back as <code>{"response", "skills_used", "tools_used"}</code>.</li>
+    </ol>
+    <div class="callout">
+      <p><strong>Session model.</strong> One Strands <code>Agent</code> per process, one microVM per session id. That gives per-session conversation memory without a memory store. The CLI persists one session id per user in <code>.deploy/session-&lt;user&gt;.txt</code>; <code>--new-session</code> starts a fresh one. Details and limits: <em>Agent &amp; Skills → Conversation memory</em>.</p>
+    </div>
+  </section>
+
+  <!-- ===================================================== AGENT & SKILLS -->
+  <section class="panel" id="p-agent" aria-labelledby="h-agent">
+    <h2 id="h-agent">Agent &amp; Skills</h2>
+    <p class="lead"><code>agent/</code> contains no domain words. Everything store-specific comes from skill files and the Gateway's tool list.</p>
+    <p class="src">Source: <code>docs/02-agent-capabilities.md</code>, <code>docs/03-architecture.md</code> § Generic agent design</p>
+
+    <h3>How agent, skills, MCP and tools tie together</h3>
+    <figure>
+      <svg viewBox="0 0 1200 770" role="img" aria-labelledby="ast-title ast-desc" font-family="Segoe UI, Arial, sans-serif">
+        <title id="ast-title">Relationship between the agent, skills, MCP Gateway and tools</title>
+        <desc id="ast-desc">Skills in S3 are synced to the agent at cold start. The AgentSkills plugin lists skill names and descriptions in the system prompt and activates a skill on request. The SkillBinding plugin injects exact Gateway tool names after activation and blocks Gateway calls whose server no active skill declares. The MCP client calls the AgentCore Gateway with the caller's token; the Gateway applies Cedar policy and routes to the orders Lambda target or the support MCP server target, which read and write DynamoDB. A bottom strip shows how the plain name create_return in a skill resolves to the Gateway tool orders___create_return and finally the Lambda function.</desc>
+        <defs>
+          <marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3b4566"/>
+          </marker>
+        </defs>
+        <style>
+          .a-grp { fill: #fafbff; stroke: #8d95b8; stroke-dasharray: 5 4; }
+          .a-sk { fill: #fff4dc; stroke: #8a5a00; stroke-width: 1.4; }
+          .a-ag { fill: #eef1ff; stroke: #3b4fd8; stroke-width: 1.4; }
+          .a-tl { fill: #e8f5ee; stroke: #1f7a4a; stroke-width: 1.4; }
+          .a-ex { fill: #f4f4f6; stroke: #6b7280; stroke-width: 1.4; }
+          .a-pol { fill: #fde8e8; stroke: #a3262b; stroke-width: 1.4; }
+          .a-band { fill: #f7f8fc; stroke: #c5cbe0; }
+          .a-ln { stroke: #3b4566; stroke-width: 1.5; fill: none; marker-end: url(#aa); }
+          .a-h { font-weight: 600; fill: #1d232b; font-size: 12.5px; }
+          .a-t { fill: #1d232b; font-size: 11.5px; }
+          .a-c { fill: #1d232b; font-size: 11px; font-family: Consolas, Menlo, monospace; }
+          .a-m { fill: #5a6573; font-size: 11px; }
+          .a-g { fill: #3b4566; font-size: 12px; font-weight: 700; }
+        </style>
+
+        <!-- Bedrock -->
+        <rect class="a-ex" x="450" y="12" width="200" height="46" rx="6"/>
+        <text class="a-h" x="550" y="32" text-anchor="middle">Amazon Bedrock</text>
+        <text class="a-m" x="550" y="48" text-anchor="middle">Claude Haiku · decides next step</text>
+
+        <!-- ===== Skills column ===== -->
+        <rect class="a-grp" x="15" y="80" width="290" height="420" rx="8"/>
+        <text class="a-g" x="27" y="99">SKILLS · what to do</text>
+        <text class="a-m" x="27" y="114">S3 skills/ → /tmp/skills at cold start</text>
+
+        <rect class="a-sk" x="30" y="125" width="260" height="78" rx="6"/>
+        <text class="a-h" x="42" y="145">order-tracking/SKILL.md</text>
+        <text class="a-c" x="42" y="163">mcp-servers: "orders"</text>
+        <text class="a-t" x="42" y="181">uses get_order,</text>
+        <text class="a-t" x="42" y="196">list_customer_orders</text>
+
+        <rect class="a-sk" x="30" y="213" width="260" height="78" rx="6"/>
+        <text class="a-h" x="42" y="233">returns-and-refunds/SKILL.md</text>
+        <text class="a-c" x="42" y="251">mcp-servers: "orders support"</text>
+        <text class="a-t" x="42" y="269">uses check_return_eligibility,</text>
+        <text class="a-t" x="42" y="284">create_return, create_ticket …</text>
+
+        <rect class="a-sk" x="30" y="301" width="260" height="78" rx="6"/>
+        <text class="a-h" x="42" y="321">support-ticketing/SKILL.md</text>
+        <text class="a-c" x="42" y="339">mcp-servers: "support"</text>
+        <text class="a-t" x="42" y="357">uses search_faq, get_ticket,</text>
+        <text class="a-t" x="42" y="372">create_ticket</text>
+
+        <rect class="a-sk" x="30" y="389" width="260" height="50" rx="6"/>
+        <text class="a-h" x="42" y="409">references/return-policy.md</text>
+        <text class="a-m" x="42" y="427">longer material, read only on demand</text>
+
+        <text class="a-m" x="30" y="460">Frontmatter description = trigger.</text>
+        <text class="a-m" x="30" y="476">Plain tool names only: no endpoints,</text>
+        <text class="a-m" x="30" y="492">credentials or server___tool names.</text>
+
+        <!-- ===== Agent column ===== -->
+        <rect class="a-grp" x="330" y="80" width="440" height="420" rx="8"/>
+        <text class="a-g" x="342" y="99">AGENT · generic loop</text>
+        <text class="a-m" x="758" y="99" text-anchor="end">Runtime shopassist_agent</text>
+
+        <rect class="a-ag" x="350" y="110" width="400" height="66" rx="6"/>
+        <text class="a-h" x="550" y="130" text-anchor="middle">Strands Agent (app.py)</text>
+        <text class="a-t" x="550" y="148" text-anchor="middle">generic system prompt + &lt;available_skills&gt;</text>
+        <text class="a-m" x="550" y="165" text-anchor="middle">only skill names + descriptions are always in context</text>
+
+        <rect class="a-ag" x="350" y="200" width="195" height="92" rx="6"/>
+        <text class="a-h" x="447" y="220" text-anchor="middle">AgentSkills plugin</text>
+        <text class="a-m" x="447" y="236" text-anchor="middle">built into Strands</text>
+        <text class="a-t" x="447" y="256" text-anchor="middle">tool: skills(name)</text>
+        <text class="a-t" x="447" y="272" text-anchor="middle">→ full SKILL.md</text>
+        <text class="a-t" x="447" y="286" text-anchor="middle">+ resource list</text>
+
+        <rect class="a-ag" x="555" y="200" width="195" height="92" rx="6"/>
+        <text class="a-h" x="652" y="220" text-anchor="middle">read_skill_resource</text>
+        <text class="a-m" x="652" y="236" text-anchor="middle">local tool (tools.py)</text>
+        <text class="a-t" x="652" y="256" text-anchor="middle">reads references/…</text>
+        <text class="a-t" x="652" y="272" text-anchor="middle">active skills only</text>
+        <text class="a-t" x="652" y="286" text-anchor="middle">no traversal · ≤ 200 KB</text>
+
+        <rect class="a-ag" x="350" y="314" width="400" height="80" rx="6"/>
+        <text class="a-h" x="550" y="334" text-anchor="middle">SkillBinding plugin (skill_binding.py)</text>
+        <text class="a-t" x="362" y="354">After skills(): append [Tool binding] with exact Gateway names</text>
+        <text class="a-t" x="362" y="370">   + "Not available to the current user: …"</text>
+        <text class="a-t" x="362" y="386">Before each Gateway call: allow only if an active skill declares it</text>
+
+        <rect class="a-ag" x="350" y="414" width="400" height="74" rx="6"/>
+        <text class="a-h" x="550" y="434" text-anchor="middle">MCPClient → Gateway (gateway_auth.py)</text>
+        <text class="a-t" x="550" y="452" text-anchor="middle">passthrough: forwards the caller's Bearer token</text>
+        <text class="a-t" x="550" y="468" text-anchor="middle">registers orders___* / support___* from tools/list</text>
+        <text class="a-m" x="550" y="483" text-anchor="middle">list is already filtered per user by Cedar</text>
+
+        <!-- Agent arrows -->
+        <path class="a-ln" d="M550,110 L550,60"/>
+        <text class="a-m" x="558" y="74">Converse / tool_use</text>
+        <path class="a-ln" d="M447,176 L447,198"/>
+        <path class="a-ln" d="M652,176 L652,198"/>
+        <path class="a-ln" d="M447,292 L447,312"/>
+        <text class="a-m" x="455" y="306">activation result</text>
+        <path class="a-ln" d="M550,394 L550,412"/>
+        <text class="a-m" x="558" y="407">allowed calls only</text>
+        <path class="a-ln" d="M290,250 L348,250"/>
+        <text class="a-m" x="319" y="242" text-anchor="middle">load</text>
+        <path class="a-ln" d="M290,414 L318,414 L318,192 L640,192 L652,198"/>
+        <text class="a-m" x="322" y="186">reads on demand</text>
+
+        <!-- ===== Gateway / tools column ===== -->
+        <rect class="a-grp" x="795" y="80" width="390" height="420" rx="8"/>
+        <text class="a-g" x="807" y="99">MCP GATEWAY + TOOLS · what can be done</text>
+
+        <rect class="a-pol" x="810" y="110" width="360" height="62" rx="6"/>
+        <text class="a-h" x="990" y="130" text-anchor="middle">shopassist-gateway: JWT → AgentCore Policy (Cedar)</text>
+        <text class="a-t" x="990" y="148" text-anchor="middle">filters tools/list · authorises every tools/call</text>
+        <text class="a-m" x="990" y="164" text-anchor="middle">alice 7 tools · bob 5 read-only · default deny</text>
+
+        <rect class="a-tl" x="810" y="192" width="172" height="168" rx="6"/>
+        <text class="a-h" x="896" y="212" text-anchor="middle">target: orders</text>
+        <text class="a-m" x="896" y="228" text-anchor="middle">Lambda orders-tools</text>
+        <text class="a-c" x="822" y="252">get_order</text>
+        <text class="a-c" x="822" y="270">list_customer_orders</text>
+        <text class="a-c" x="822" y="288">check_return_</text>
+        <text class="a-c" x="832" y="302">eligibility</text>
+        <text class="a-c" x="822" y="320">create_return</text>
+        <text class="a-m" x="896" y="348" text-anchor="middle">rules.py enforces policy</text>
+
+        <rect class="a-tl" x="998" y="192" width="172" height="168" rx="6"/>
+        <text class="a-h" x="1084" y="212" text-anchor="middle">target: support</text>
+        <text class="a-m" x="1084" y="228" text-anchor="middle">FastMCP on Runtime</text>
+        <text class="a-c" x="1010" y="252">create_ticket</text>
+        <text class="a-c" x="1010" y="270">get_ticket</text>
+        <text class="a-c" x="1010" y="288">search_faq</text>
+        <text class="a-m" x="1084" y="330" text-anchor="middle">schema from function</text>
+        <text class="a-m" x="1084" y="346" text-anchor="middle">signatures (tools/list)</text>
+
+        <rect class="a-ex" x="810" y="382" width="172" height="46" rx="6"/>
+        <text class="a-h" x="896" y="402" text-anchor="middle">DynamoDB</text>
+        <text class="a-m" x="896" y="418" text-anchor="middle">orders, returns</text>
+        <rect class="a-ex" x="998" y="382" width="172" height="46" rx="6"/>
+        <text class="a-h" x="1084" y="402" text-anchor="middle">DynamoDB</text>
+        <text class="a-m" x="1084" y="418" text-anchor="middle">tickets</text>
+
+        <text class="a-m" x="810" y="452">orders schema: static tools_schema.json (Lambda has no tools/list)</text>
+        <text class="a-m" x="810" y="468">support auth: M2M token via AgentCore Identity</text>
+        <text class="a-m" x="810" y="484">Gateway names: &lt;target&gt;___&lt;tool&gt; (three underscores)</text>
+
+        <!-- Gateway arrows -->
+        <path class="a-ln" d="M896,172 L896,190"/>
+        <path class="a-ln" d="M1084,172 L1084,190"/>
+        <path class="a-ln" d="M896,360 L896,380"/>
+        <path class="a-ln" d="M1084,360 L1084,380"/>
+        <path class="a-ln" d="M750,451 L782,451 L782,141 L808,141"/>
+        <text class="a-m" x="776" y="300" text-anchor="end" transform="rotate(-90 776 300)">tools/list · tools/call (user token)</text>
+
+        <!-- ===== Name resolution strip ===== -->
+        <rect class="a-band" x="15" y="520" width="1170" height="240" rx="10"/>
+        <text class="a-g" x="29" y="543">HOW ONE NAME IS RESOLVED · example: a return request</text>
+
+        <rect class="a-sk" x="30" y="560" width="172" height="118" rx="6"/>
+        <text class="a-h" x="42" y="580">1 · Skill text</text>
+        <text class="a-t" x="42" y="600">returns-and-refunds</text>
+        <text class="a-t" x="42" y="616">says call</text>
+        <text class="a-c" x="42" y="632">create_return</text>
+        <text class="a-m" x="42" y="652">declares servers</text>
+        <text class="a-c" x="42" y="668">"orders support"</text>
+
+        <rect class="a-ag" x="222" y="560" width="172" height="118" rx="6"/>
+        <text class="a-h" x="234" y="580">2 · Activation</text>
+        <text class="a-t" x="234" y="600">model sees the skill</text>
+        <text class="a-t" x="234" y="616">description, calls</text>
+        <text class="a-c" x="234" y="632">skills("returns-</text>
+        <text class="a-c" x="234" y="646">  and-refunds")</text>
+        <text class="a-m" x="234" y="668">AgentSkills plugin</text>
+
+        <rect class="a-ag" x="414" y="560" width="172" height="118" rx="6"/>
+        <text class="a-h" x="426" y="580">3 · Binding</text>
+        <text class="a-t" x="426" y="600">SkillBinding appends</text>
+        <text class="a-c" x="426" y="618">- orders___create_return</text>
+        <text class="a-t" x="426" y="638">or, for bob:</text>
+        <text class="a-m" x="426" y="654">"Not available to the</text>
+        <text class="a-m" x="426" y="668">current user: create_return"</text>
+
+        <rect class="a-ag" x="606" y="560" width="172" height="118" rx="6"/>
+        <text class="a-h" x="618" y="580">4 · Local gate</text>
+        <text class="a-t" x="618" y="600">model calls</text>
+        <text class="a-c" x="618" y="616">orders___create_return</text>
+        <text class="a-t" x="618" y="636">server "orders" declared</text>
+        <text class="a-t" x="618" y="652">by an active skill ✓</text>
+        <text class="a-m" x="618" y="668">else: cancelled + hint</text>
+
+        <rect class="a-pol" x="798" y="560" width="172" height="118" rx="6"/>
+        <text class="a-h" x="810" y="580">5 · Gateway + Cedar</text>
+        <text class="a-t" x="810" y="600">JWT valid ✓</text>
+        <text class="a-t" x="810" y="616">AuthorizeAction</text>
+        <text class="a-t" x="810" y="636">alice → allow</text>
+        <text class="a-t" x="810" y="652">bob → deny</text>
+        <text class="a-m" x="810" y="668">independent of the model</text>
+
+        <rect class="a-tl" x="990" y="560" width="180" height="118" rx="6"/>
+        <text class="a-h" x="1002" y="580">6 · Tool executes</text>
+        <text class="a-t" x="1002" y="600">Lambda routes to</text>
+        <text class="a-c" x="1002" y="616">TOOLS["create_return"]</text>
+        <text class="a-t" x="1002" y="636">re-checks eligibility,</text>
+        <text class="a-t" x="1002" y="652">writes DynamoDB</text>
+        <text class="a-m" x="1002" y="668">→ RET-xxxxxx to model</text>
+
+        <path class="a-ln" d="M202,619 L220,619"/>
+        <path class="a-ln" d="M394,619 L412,619"/>
+        <path class="a-ln" d="M586,619 L604,619"/>
+        <path class="a-ln" d="M778,619 L796,619"/>
+        <path class="a-ln" d="M970,619 L988,619"/>
+
+        <text class="a-t" x="30" y="704"><tspan font-weight="600">Skill</tspan> = procedure (what to do) · <tspan font-weight="600">Tool</tspan> = code + data (what can be done) · <tspan font-weight="600">MCP Gateway</tspan> = how tools are exposed and who may call them · <tspan font-weight="600">Agent</tspan> = generic loop joining them</text>
+        <text class="a-m" x="30" y="726">Layers 4 and 5 are independent: even if the model skipped the binding, Cedar still denies bob, and the tool still re-checks eligibility.</text>
+        <text class="a-m" x="30" y="744">Adding a skill touches column 1 only. Adding a tool touches column 3 (+ Cedar allow-list). The agent column never changes.</text>
+      </svg>
+      <figcaption>Top: the three building blocks and the plugins that connect them. Bottom: the six hops from a plain tool name in a skill to code running behind the Gateway.</figcaption>
+    </figure>
+
+    <h3>Who's who</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Concept</th><th>What it is here</th><th>Defined in</th><th>Linked to the others by</th></tr></thead>
+      <tbody>
+        <tr><td>Agent</td><td>Generic Strands loop on AgentCore Runtime; no domain knowledge</td><td><code>agent/</code></td><td>Loads skills via AgentSkills; reaches tools via MCPClient; SkillBinding joins the two</td></tr>
+        <tr><td>Skill</td><td>Folder with <code>SKILL.md</code> (frontmatter + steps) and optional <code>references/</code></td><td><code>skills/</code> → S3 <code>skills/</code></td><td><code>metadata.mcp-servers</code> names Gateway targets; body uses plain tool names</td></tr>
+        <tr><td>MCP (Gateway)</td><td>One MCP endpoint over two targets, with JWT + Cedar in front</td><td>Terraform <code>modules/gateway</code> / boto3 <code>steps/gateway.py</code></td><td>Target name becomes the tool prefix (<code>orders___</code>, <code>support___</code>) = the server name skills declare</td></tr>
+        <tr><td>MCP server</td><td>FastMCP <code>support</code> server on its own Runtime</td><td><code>mcp_servers/support_mcp/server.py</code></td><td>Registered as the <code>support</code> Gateway target; tools listed via <code>tools/list</code></td></tr>
+        <tr><td>Tool</td><td>A function that reads/writes data and enforces rules</td><td><code>orders_lambda/handler.py</code>, <code>support_mcp/server.py</code>, <code>common/rules.py</code></td><td>Exposed as <code>&lt;target&gt;___&lt;tool&gt;</code>; Cedar action name is the same string</td></tr>
+        <tr><td>Policy</td><td>Cedar statements per group</td><td><code>infra/policies/*.cedar</code></td><td>Actions = Gateway tool names; decides which tools each user sees and calls</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Agent modules</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>File</th><th>Responsibility</th></tr></thead>
+      <tbody>
+        <tr><td><code>app.py</code></td><td><code>BedrockAgentCoreApp</code> entrypoint; builds the Agent (Bedrock model, MCPClient, <code>read_skill_resource</code>, AgentSkills + SkillBinding plugins); generic system prompt; rebuilds the agent when the caller changes</td></tr>
+        <tr><td><code>config.py</code></td><td><code>Settings.from_env()</code>: <code>MODEL_ID</code>, <code>AWS_REGION</code>, <code>GATEWAY_URL</code>, <code>GATEWAY_AUTH_MODE</code>, <code>SKILLS_S3_URI</code>/<code>SKILLS_DIR</code>, <code>COGNITO_*</code></td></tr>
+        <tr><td><code>skill_source.py</code></td><td>Path-safe sync of <code>s3://…/skills/</code> to <code>/tmp/skills</code>, or local <code>SKILLS_DIR</code></td></tr>
+        <tr><td><code>skill_binding.py</code></td><td>Hybrid skill→tool binding hooks, startup validation, usage tracking</td></tr>
+        <tr><td><code>gateway_auth.py</code></td><td><code>httpx.Auth</code> for the MCP connection: passthrough, client_credentials or none</td></tr>
+        <tr><td><code>tools.py</code></td><td><code>read_skill_resource(skill_name, path)</code>, the only local tool</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Progressive disclosure</h3>
+    <div class="grid">
+      <div class="card"><h4>1 · Discovery</h4><p>An <code>&lt;available_skills&gt;</code> block (name + description) is added to the system prompt. Only this short text is always in context.</p></div>
+      <div class="card"><h4>2 · Activation</h4><p>Model calls the <code>skills</code> tool. Full <code>SKILL.md</code> plus resource list is returned and recorded in agent state.</p></div>
+      <div class="card"><h4>3 · Resources</h4><p>Model reads <code>references/…</code> on demand with <code>read_skill_resource</code>. Activated skills only; traversal rejected; 200 KB cap.</p></div>
+    </div>
+
+    <h3>Hybrid tool binding (<code>SkillBinding</code>)</h3>
+    <p>Skills declare <em>servers</em> in <code>metadata.mcp-servers</code> and use <em>plain</em> tool names. The Gateway exposes <code>&lt;target&gt;___&lt;tool&gt;</code>. The plugin bridges the two:</p>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Hook</th><th>Behaviour</th></tr></thead>
+      <tbody>
+        <tr><td><code>AfterToolCallEvent</code> on <code>skills</code></td><td>Appends a <code>[Tool binding]</code> block: exact Gateway names for the declared servers, plus "Not available to the current user: …" for tools the caller lacks</td></tr>
+        <tr><td><code>BeforeToolCallEvent</code></td><td>A Gateway tool runs only if an activated skill declares its server; otherwise the call is cancelled with a hint naming the skill(s) to activate. Local tools always allowed</td></tr>
+        <tr><td><code>BeforeInvocationEvent</code></td><td>Resets per-invocation <code>skills_used</code>/<code>tools_used</code></td></tr>
+      </tbody>
+    </table></div>
+<pre><code>---
+name: returns-and-refunds
+description: Use when a customer wants to return an item, ...
+metadata:
+  mcp-servers: "orders support"
+---
+... Call `check_return_eligibility` with the order id and sku ...</code></pre>
+    <p>Startup <code>validate_skills</code> logs declared servers without tools and backticked names not on declared servers (INFO in passthrough mode, since per-user filtering makes gaps normal; WARNING otherwise).</p>
+
+    <h3>Why the binding exists</h3>
+    <p>Skills say <code>create_return</code>; the Gateway exposes <code>orders___create_return</code>, and which tools exist depends on the caller. Something has to bridge the two.</p>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Option</th><th>What breaks</th></tr></thead>
+      <tbody>
+        <tr><td>Full Gateway names in skills</td><td>Skills depend on target names; renaming a target or moving a tool means editing every skill</td></tr>
+        <tr><td>Plain names, model works out the mapping</td><td>Usually works, not reliably: the model sometimes calls <code>create_return</code> as written and gets "unknown tool"</td></tr>
+        <tr><td>Plain names + resolver (<code>SkillBinding</code>)</td><td>One plugin to maintain</td></tr>
+      </tbody>
+    </table></div>
+    <div class="grid">
+      <div class="card"><h4>1 · Binding text <span class="pill ok">most value</span></h4><p>Exact names at activation. Turns bob's missing <code>create_return</code> into "Not available to the current user", which gives the clean permission reply scenario b checks for.</p></div>
+      <div class="card"><h4>2 · Pre-call check <span class="pill info">optional</span></h4><p>Forces skill activation first, so the model follows the skill's steps. Limits each skill to its declared servers, which matters because skills change behaviour without code review.</p></div>
+      <div class="card"><h4>3 · Validation and tracking</h4><p>Startup logs catch typos in skill tool names. <code>skills_used</code>/<code>tools_used</code> feed the CLI line and <code>demo_access.py</code>.</p></div>
+    </div>
+    <div class="callout warn"><p><strong>Behaviour layer, not a security control.</strong> It runs inside the agent and guides the model. Cedar hides and denies tools per user (scenario d), and <code>create_return</code> re-checks eligibility server-side. Removing the binding wouldn't let bob do anything new.</p></div>
+    <p><strong>Costs:</strong> three hooks tied to Strands' event API; part of the ~800–1,000 tokens added on activation; an occasional extra model call when a premature tool call is cancelled. <strong>Alternative:</strong> full Gateway names in skills plus a generic system-prompt rule for missing tools. That's simpler, but it couples skills to target names and makes the permission message depend on the model following a general rule.</p>
+
+    <h3>Conversation memory</h3>
+    <p>The agent remembers a conversation in process memory only. There is no memory store: the "memory" is the message history of one Strands <code>Agent</code>, kept alive because AgentCore Runtime gives each session its own microVM.</p>
+<pre><code>session id ──► microVM ──► app.py process ──► AgentRuntime ──► Agent
+                                                               ├─ messages  (conversation history)
+                                                               └─ state     (activated skills)</code></pre>
+    <ol class="flow">
+      <li><strong>The client picks the conversation.</strong> The CLI and chat UI send <code>X-Amzn-Bedrock-AgentCore-Runtime-Session-Id</code> (the CLI keeps one per user in <code>.deploy/session-&lt;user&gt;.txt</code>). The Runtime routes that id to the same microVM.</li>
+      <li><strong>One agent per process.</strong> <code>get_runtime()</code> holds one <code>AgentRuntime</code>, which holds one Strands <code>Agent</code>.</li>
+      <li><strong>Built once, then reused.</strong> The first message loads skills, connects to the Gateway and lists tools. <code>_agent_for()</code> returns the same object while the token <code>sub</code> stays the same.</li>
+      <li><strong>Strands keeps the history.</strong> <code>agent(prompt)</code> appends the user message, replies and tool results to <code>agent.messages</code>; the whole list goes to Bedrock on the next turn.</li>
+      <li><strong>Skill state carries over.</strong> Activated skills live in <code>agent.state["agent_skills"]</code>, so follow-ups don't re-activate.</li>
+    </ol>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Limit</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td>Not persisted</td><td>Gone when the microVM ends (Runtime idle timeout or max lifetime; this repo uses the AWS defaults) or on redeploy</td></tr>
+        <tr><td>40-message window</td><td>Strands' default <code>SlidingWindowConversationManager</code>; tool calls and results count</td></tr>
+        <tr><td>Changing user resets it</td><td>A different token <code>sub</code> in the same process rebuilds the agent</td></tr>
+        <tr><td>One conversation per process</td><td>Requests take turns behind a lock. Locally there's one conversation per process whatever session id you send</td></tr>
+        <tr><td>Cost grows per turn</td><td>Full history re-sent on every model call</td></tr>
+        <tr><td>Starting fresh</td><td><code>--new-session</code>, <code>/new</code> or <em>New session</em> in the chat UI: new microVM, empty history</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Across sessions:</strong> needs storage outside the microVM: AgentCore Memory, or a Strands session manager saving <code>messages</code> and <code>state</code> to S3 or DynamoDB. Not part of this PoC.</p>
+
+    <h3>Skills</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Skill</th><th>Activates when the user…</th><th><code>mcp-servers</code></th><th>Tools</th></tr></thead>
+      <tbody>
+        <tr><td><code>order-tracking</code></td><td>asks where an order is, tracking, contents, past orders</td><td><code>orders</code></td><td><code>list_customer_orders</code>, <code>get_order</code></td></tr>
+        <tr><td><code>returns-and-refunds</code></td><td>wants to return, asks about eligibility/window/refund</td><td><code>orders support</code></td><td><code>list_customer_orders</code>, <code>get_order</code>, <code>check_return_eligibility</code>, <code>create_return</code>, <code>create_ticket</code></td></tr>
+        <tr><td><code>support-ticketing</code></td><td>general question, problem needing a person, ticket open/check</td><td><code>support</code></td><td><code>search_faq</code>, <code>get_ticket</code>, <code>create_ticket</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Tool catalogue</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Gateway name</th><th>Target</th><th>Input</th><th>Output</th></tr></thead>
+      <tbody>
+        <tr><td><code>orders___get_order</code></td><td>Lambda</td><td><code>order_id</code></td><td>Order object or <code>ORDER_NOT_FOUND</code></td></tr>
+        <tr><td><code>orders___list_customer_orders</code></td><td>Lambda</td><td><code>customer_id</code></td><td>Orders summary, newest first</td></tr>
+        <tr><td><code>orders___check_return_eligibility</code></td><td>Lambda</td><td><code>order_id</code>, <code>sku</code></td><td><code>eligible</code>, <code>reason</code>, days, window, <code>refund_amount</code></td></tr>
+        <tr><td><code>orders___create_return</code></td><td>Lambda</td><td><code>order_id</code>, <code>sku</code>, <code>reason</code></td><td><code>RET-xxxxxx</code>, refund, label URL, or <code>NOT_ELIGIBLE</code></td></tr>
+        <tr><td><code>support___create_ticket</code></td><td>MCP runtime</td><td><code>customer_id</code>, <code>subject</code>, <code>description</code>, <code>order_id</code>, <code>priority</code></td><td><code>TCK-xxxxxx</code>, <code>OPEN</code></td></tr>
+        <tr><td><code>support___get_ticket</code></td><td>MCP runtime</td><td><code>ticket_id</code></td><td>Ticket or <code>TICKET_NOT_FOUND</code></td></tr>
+        <tr><td><code>support___search_faq</code></td><td>MCP runtime</td><td><code>query</code></td><td>Up to 3 keyword matches from bundled <code>faq.json</code></td></tr>
+      </tbody>
+    </table></div>
+    <p><code>orders</code> schemas are a static file (<code>tools_schema.json</code>, Lambda has no <code>tools/list</code>); <code>support</code> schemas come from FastMCP function signatures.</p>
+
+    <h3>Return policy: enforced by the tool, explained by the skill</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>#</th><th>Rule (<code>rules.py::check_eligibility</code>)</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>Order exists</td></tr>
+        <tr><td>2</td><td>SKU is part of the order (case-insensitive)</td></tr>
+        <tr><td>3</td><td>Order is <code>DELIVERED</code> with a <code>delivered_date</code></td></tr>
+        <tr><td>4</td><td>Item not already returned</td></tr>
+        <tr><td>5</td><td>Category is not <code>final-sale</code></td></tr>
+        <tr><td>6</td><td>Days since delivery ≤ window (electronics 15, else 30; inclusive, UTC)</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout ok"><p><code>create_return</code> re-runs the same check before writing, so a model that skips eligibility still cannot create an ineligible return. If <code>references/return-policy.md</code> drifts from the code, the tool wins: the agent is told to explain the tool's <code>reason</code>.</p></div>
+
+    <h3>Guardrails</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Guardrail</th><th>Enforced where</th><th>Strength</th></tr></thead>
+      <tbody>
+        <tr><td>Never invent data; facts come from tool results</td><td>System prompt + skill "Never" sections</td><td><span class="pill warn">Prompt</span></td></tr>
+        <tr><td>Activate a skill before Gateway tools</td><td>System prompt + <code>SkillBinding</code> cancels calls</td><td><span class="pill ok">Code</span></td></tr>
+        <tr><td>Eligibility before return</td><td>Skill + <code>create_return</code> re-check</td><td><span class="pill ok">Tool</span></td></tr>
+        <tr><td>No duplicate returns</td><td>Tool refuses second return of same item</td><td><span class="pill ok">Tool</span></td></tr>
+        <tr><td>No duplicate tickets</td><td>Skill instructions only</td><td><span class="pill warn">Prompt</span></td></tr>
+        <tr><td>Don't work around missing tools</td><td>Binding text + Cedar denies anyway</td><td><span class="pill ok">Policy</span></td></tr>
+        <tr><td>Read only activated-skill files</td><td><code>read_skill_resource</code> checks</td><td><span class="pill ok">Code</span></td></tr>
+        <tr><td>Don't promise refunds/timelines; don't mention internal names</td><td>Prompt / skill</td><td><span class="pill warn">Prompt</span></td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ===================================================== SECURITY -->
+  <section class="panel" id="p-security" aria-labelledby="h-security">
+    <h2 id="h-security">Security &amp; Access Control</h2>
+    <p class="lead">Access is enforced outside the agent. The model can misbehave and still not reach a tool the caller isn't entitled to.</p>
+    <p class="src">Source: <code>docs/03-architecture.md</code> § Per-user access control, Identity design, Security notes</p>
+
+    <h3>Enforcement layers</h3>
+    <div class="layers">
+      <div class="layer"><div class="n">1</div><div class="b"><strong>Runtime inbound JWT authorizer + claim rule.</strong> Token must come from the users client and <code>cognito:groups</code> CONTAINS_ANY <code>shop-admin</code>, <code>shop-viewer</code>. carol stops here.</div></div>
+      <div class="layer"><div class="n">2</div><div class="b"><strong>Token passthrough</strong> (<code>GATEWAY_AUTH_MODE=passthrough</code>). The Gateway sees the user, not the agent.</div></div>
+      <div class="layer"><div class="n">3</div><div class="b"><strong>Gateway inbound JWT authorizer.</strong> Users client (or M2M client for local dev).</div></div>
+      <div class="layer"><div class="n">4</div><div class="b"><strong>AgentCore Policy (Cedar), ENFORCE, default deny.</strong> Filters <code>tools/list</code> and authorises every <code>tools/call</code>. bob sees 5 tools, alice 7.</div></div>
+      <div class="layer soft"><div class="n">5</div><div class="b"><strong>Skill guidance (soft).</strong> Binding text marks unavailable tools so the agent explains the missing permission instead of trying.</div></div>
+    </div>
+
+    <h3>Outcome matrix</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Layer</th><th>carol</th><th>bob</th><th>alice</th></tr></thead>
+      <tbody>
+        <tr><td>1 Runtime JWT + claim</td><td><span class="pill risk">401/403</span></td><td>pass</td><td>pass</td></tr>
+        <tr><td>2 Passthrough</td><td>n/a</td><td>bob's token</td><td>alice's token</td></tr>
+        <tr><td>3 Gateway JWT</td><td>n/a</td><td>pass</td><td>pass</td></tr>
+        <tr><td>4 Cedar</td><td>n/a</td><td>5 read-only tools</td><td>all 7</td></tr>
+        <tr><td>5 Skill guidance</td><td>n/a</td><td>"your account doesn't have permission"</td><td>n/a</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Identity hops</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Hop</th><th>Inbound check</th><th>Credential</th></tr></thead>
+      <tbody>
+        <tr><td>CLI → agent runtime</td><td>JWT: users client + groups claim</td><td>User access token</td></tr>
+        <tr><td>Agent → Gateway</td><td>JWT: users or M2M client, then Cedar</td><td>Same user token (passthrough)</td></tr>
+        <tr><td>Gateway → orders Lambda</td><td>IAM</td><td>Gateway execution role</td></tr>
+        <tr><td>Gateway → support MCP runtime</td><td>JWT: M2M client</td><td>client_credentials token via AgentCore Identity (<code>shopassist/invoke</code>)</td></tr>
+        <tr><td>Local dev → real Gateway</td><td>JWT: M2M, Cedar <code>m2m_dev_client</code></td><td><code>GATEWAY_AUTH_MODE=client_credentials</code></td></tr>
+      </tbody>
+    </table></div>
+    <p>The deployed agent role has <strong>no</strong> token-vault or Secrets Manager permissions; in passthrough mode it never mints a token. It only has the workload-identity token APIs the Runtime needs for a JWT inbound authorizer.</p>
+
+    <h3>Implementation details worth scrutinising</h3>
+    <details open>
+      <summary>Token plumbing across threads</summary>
+      <p><code>bind_request_token()</code> writes the token into a contextvar <em>and</em> a process-wide relay, because Strands' <code>MCPClient</code> runs on a background thread whose context was copied at start. The agent caches its tool list per token <code>sub</code> and rebuilds the MCP client and agent when the <code>sub</code> changes. Calls are serialised with a lock.</p>
+    </details>
+    <details>
+      <summary>Header allowlist</summary>
+      <p><code>requestHeaderAllowlist = ["Authorization"]</code> on the agent runtime is what lets the token reach agent code. Without it the agent returns <code>error: missing_authorization</code>.</p>
+    </details>
+    <details>
+      <summary>Cedar specifics</summary>
+      <p>Principal type <code>AgentCore::OAuthUser</code>. JWT claims become string tags; arrays arrive as JSON text, so policies match with <code>principal.getTag("cognito:groups") like "*\"shop-admin\"*"</code>. Actions are Gateway tool names. The viewer policy is an allow-list, so new tools are denied to viewers by default. Templates use <code>{{GATEWAY_ARN}}</code>/<code>{{M2M_CLIENT_ID}}</code> placeholders.</p>
+    </details>
+    <details>
+      <summary>Creation ordering constraints</summary>
+      <p>Cognito domain → credential provider (discovery needs <code>token_endpoint</code>). Policy engine → Gateway (with <code>ENFORCE</code>) → targets (support MCP runtime must be READY) → policies (<code>CreatePolicy</code> validates action names against Gateway tools).</p>
+    </details>
+    <details>
+      <summary>SigV4 vs JWT</summary>
+      <p>A runtime with a JWT authorizer doesn't accept SigV4, so the CLI calls the HTTPS invocation URL with a Bearer token directly.</p>
+    </details>
+
+    <h3>Already in place</h3>
+    <ul>
+      <li>Trust policies use <code>aws:SourceAccount</code>/<code>aws:SourceArn</code> (confused-deputy guard); each role scoped to its own tables, zip and skills prefix.</li>
+      <li>S3 public access blocked; secrets in AgentCore-managed Secrets Manager; <code>.deploy/</code> git-ignored.</li>
+      <li>Skills cannot name endpoints or credentials; binding blocks undeclared servers.</li>
+      <li>Independent proof: <code>scripts/demo_access.py</code> calls the Gateway directly with bob's token and expects a denial.</li>
+    </ul>
+  </section>
+
+  <!-- ===================================================== DATA / PACKAGING / OPS -->
+  <section class="panel" id="p-data" aria-labelledby="h-data">
+    <h2 id="h-data">Data, Packaging &amp; Operations</h2>
+    <p class="src">Source: <code>docs/03-architecture.md</code> § Data model, Packaging, Observability</p>
+
+    <h3>Data model (DynamoDB, PAY_PER_REQUEST)</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Table</th><th>Key</th><th>Written by</th><th>Attributes</th></tr></thead>
+      <tbody>
+        <tr><td><code>shopassist-orders</code></td><td><code>order_id</code>; GSI <code>customer_id-index</code> (ALL)</td><td><code>seed_data.py</code>; <code>create_return</code> sets <code>items[i].returned</code></td><td>Order object: status, dates, carrier, tracking, items, total</td></tr>
+        <tr><td><code>shopassist-returns</code></td><td><code>return_id</code></td><td><code>create_return</code></td><td>order, customer, sku, reason, status, refund, label, created_at</td></tr>
+        <tr><td><code>shopassist-tickets</code></td><td><code>ticket_id</code></td><td><code>create_ticket</code></td><td>customer, order, subject, description, priority, status, created_at</td></tr>
+      </tbody>
+    </table></div>
+    <p><code>data/seed.json</code> holds 3 customers and 10 orders with relative dates (<code>delivered_days_ago</code>). <code>seed_data.py</code> resolves them to ISO dates and overwrites by key, so re-seeding resets return windows. <code>store.py</code> abstracts <code>STORE=memory</code> (local, tests) vs DynamoDB.</p>
+    <div class="callout warn"><p>Note: <code>create_return</code> writes the return record and updates the order item as two operations. The docs don't describe a transaction; worth confirming whether <code>TransactWriteItems</code> is used.</p></div>
+
+    <h3>Packaging (direct code deployment)</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Artifact</th><th>Contents</th><th>Runs on</th><th>Entry point</th></tr></thead>
+      <tbody>
+        <tr><td><code>dist/agent.zip</code></td><td><code>agent/*</code> + deps</td><td>Runtime <code>PYTHON_3_12</code>, arm64</td><td><code>app.py</code></td></tr>
+        <tr><td><code>dist/support_mcp.zip</code></td><td><code>support_mcp/*</code> + <code>common/</code> + deps</td><td>Runtime <code>PYTHON_3_12</code>, arm64</td><td><code>server.py</code> (stateless streamable HTTP, <code>:8000/mcp</code>)</td></tr>
+        <tr><td><code>dist/orders_lambda.zip</code></td><td><code>handler.py</code> + <code>common/</code></td><td>Lambda python3.12, arm64</td><td><code>handler.lambda_handler</code></td></tr>
+      </tbody>
+    </table></div>
+    <ul>
+      <li>Cross-built with <code>uv pip install --python-platform aarch64-manylinux2014 --python-version 3.12 --only-binary=:all:</code>, so Windows/x86 builds run on arm64.</li>
+      <li>Versioned bucket; runtimes and Lambda pin the S3 object version, so a rebuilt zip becomes an in-place update.</li>
+      <li>Skills are uploaded separately; a skill change needs no new zip, only a new session.</li>
+    </ul>
+
+    <h3>Observability</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Signal</th><th>Where</th></tr></thead>
+      <tbody>
+        <tr><td>Agent logs (skills loaded, visible tools, blocked calls)</td><td><code>/aws/bedrock-agentcore/runtimes/&lt;agent-id&gt;-DEFAULT</code></td></tr>
+        <tr><td>Support MCP logs</td><td><code>/aws/bedrock-agentcore/runtimes/&lt;mcp-id&gt;-DEFAULT</code></td></tr>
+        <tr><td>Lambda tool calls (argument names only)</td><td><code>/aws/lambda/shopassist-orders-tools</code></td></tr>
+        <tr><td>Per-reply usage</td><td><code>skills_used</code>/<code>tools_used</code> in each response</td></tr>
+        <tr><td>Gateway target errors</td><td>Returned in detail (<code>exception_level = "DEBUG"</code> in Terraform)</td></tr>
+        <tr><td>Metrics, traces</td><td>Roles may write X-Ray and CloudWatch metrics; no OTEL distro in the zip</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout warn"><p>No automatic agent spans in CloudWatch GenAI observability. To get traces: add <code>aws-opentelemetry-distro</code> and enable CloudWatch Transaction Search.</p></div>
+
+    <h3>Troubleshooting hot spots</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Symptom</th><th>Likely cause</th></tr></thead>
+      <tbody>
+        <tr><td><code>AccessDeniedException</code> on model</td><td>Bedrock model access, region/profile, or SCP blocking a region the <code>us.*</code> profile routes to</td></tr>
+        <tr><td>401/403 for alice or bob</td><td>Wrong client (M2M token at runtime), stale <code>.deploy/</code>, missing group, temp password</td></tr>
+        <tr><td>"no Authorization header reached the agent"</td><td>Runtime header allowlist missing</td></tr>
+        <tr><td>Policy <code>CREATE_FAILED</code></td><td>Unknown action names, targets not ready, unsubstituted placeholders</td></tr>
+        <tr><td>Role cannot be assumed right after create</td><td>IAM propagation (Terraform 15 s sleep; boto3 retries with backoff up to 2 min)</td></tr>
+        <tr><td><code>invalid ELF header</code> / import errors</td><td>Wrong-platform wheels</td></tr>
+        <tr><td>No <code>support___*</code> tools listed</td><td>MCP runtime not READY at target creation, or OAuth config wrong; re-sync target</td></tr>
+      </tbody>
+    </table></div>
+    <p class="src">Full list: <code>docs/09-troubleshooting.md</code></p>
+  </section>
+
+  <!-- ===================================================== DEPLOYMENT -->
+  <section class="panel" id="p-deploy" aria-labelledby="h-deploy">
+    <h2 id="h-deploy">Deployment: Terraform vs boto3</h2>
+    <p class="lead">The same resource graph twice. Both write <code>.deploy/outputs.json</code> and <code>.deploy/users.json</code>, so client scripts work with either. Deploy only one at a time: names collide.</p>
+    <p class="src">Source: <code>docs/04-deploy-terraform.md</code>, <code>docs/05-deploy-boto3.md</code>, <code>docs/06-terraform-vs-boto3.md</code></p>
+
+    <h3>Mental model</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th></th><th>Terraform (<code>infra/terraform/</code>)</th><th>boto3 (<code>infra/boto3/</code>)</th></tr></thead>
+      <tbody>
+        <tr><td>You write</td><td>Desired end state</td><td>The calls to get there, in order</td></tr>
+        <tr><td>Ordering</td><td>Dependency graph + a few <code>depends_on</code></td><td>13 numbered steps in <code>deploy.py</code></td></tr>
+        <tr><td>State</td><td><code>terraform.tfstate</code></td><td><code>state.json</code> cache + name lookups</td></tr>
+        <tr><td>Change detection</td><td><code>plan</code></td><td>Hand-written per-step drift checks</td></tr>
+        <tr><td>Teardown</td><td><code>terraform destroy</code></td><td><code>destroy.py</code>, by name, continues past failures, works without state</td></tr>
+        <tr><td>Size</td><td>~1,500 lines HCL (root + 6 modules)</td><td>~2,600 lines Python (with docstrings, waits)</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Topic comparison</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Topic</th><th>Terraform</th><th>boto3</th></tr></thead>
+      <tbody>
+        <tr><td>Idempotency</td><td>Built in</td><td>Get-or-create-or-update in every step</td></tr>
+        <tr><td>Drift</td><td>All managed attributes the provider reads back</td><td>Only the fields each step compares</td></tr>
+        <tr><td>Eventual consistency</td><td><code>time_sleep</code> 15 s</td><td>Polling + <code>call_with_iam_retry</code> with backoff</td></tr>
+        <tr><td>Failure recovery</td><td>Partial state; tainted resources replaced</td><td>State per step; <code>CREATE_FAILED</code> resources recreated</td></tr>
+        <tr><td>New-feature lag</td><td>Needs <code>hashicorp/aws</code> ≥ 6.71; some shapes differ from API</td><td>As soon as botocore has it</td></tr>
+        <tr><td>Secrets</td><td><span class="pill risk">M2M secret + passwords in state</span></td><td>Secret read when needed; passwords only in <code>users.json</code></td></tr>
+        <tr><td>MCP target tool refresh</td><td>Manual <code>synchronize-gateway-targets</code></td><td>Automatic after MCP runtime update</td></tr>
+        <tr><td>CI/CD fit / team use</td><td><span class="pill ok">Strong</span></td><td><span class="pill warn">Weak beyond a PoC</span></td></tr>
+        <tr><td>Learning value</td><td>API calls hidden</td><td>Every call, order and wait visible</td></tr>
+      </tbody>
+    </table></div>
+    <div class="callout"><p><strong>Docs' recommendation:</strong> use Terraform to deploy and the boto3 code to learn. Add a remote backend (S3 + locking) before anyone else uses the Terraform stack.</p></div>
+
+    <h3>boto3 step order (mirrors the dependency graph)</h3>
+    <ol class="flow">
+      <li>S3 bucket (versioned, public access blocked), zips, skills mirror</li>
+      <li>Cognito pool, domain, resource server, M2M + users clients, groups, demo users</li>
+      <li>AgentCore Identity credential provider (needs the domain)</li>
+      <li>Policy engine</li>
+      <li>IAM roles (need provider secret ARN and engine ARN)</li>
+      <li>DynamoDB tables + seed</li>
+      <li>Lambda + log group</li>
+      <li>Support MCP runtime (must be READY before the Gateway lists its tools)</li>
+      <li>Gateway, then target <code>orders</code>, then target <code>support</code> (one at a time)</li>
+      <li>Cedar policies (validated against Gateway tools)</li>
+      <li>Agent runtime (needs Gateway URL)</li>
+      <li>Budget (optional)</li>
+      <li><code>.deploy/outputs.json</code></li>
+    </ol>
+
+    <h3>Verified runs (2026-10-29, Workshop Studio, us-east-1)</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Scenario (<code>demo_access.py</code>)</th><th>Enforced by</th><th>Terraform</th><th>boto3</th></tr></thead>
+      <tbody>
+        <tr><td>a · alice creates the return</td><td>All layers allow</td><td><span class="pill ok">Pass</span></td><td><span class="pill ok">Pass</span></td></tr>
+        <tr><td>b · bob gets no <code>create_return</code>, permission explained</td><td>Cedar hides tool; skill explains</td><td><span class="pill ok">Pass</span></td><td><span class="pill ok">Pass</span></td></tr>
+        <tr><td>c · carol rejected</td><td>Runtime JWT claim rule</td><td><span class="pill ok">HTTP 401</span></td><td><span class="pill ok">HTTP 401</span></td></tr>
+        <tr><td>d · bob <code>tools/list</code> = 5; bob <code>tools/call create_return</code> denied; alice = 7</td><td>Cedar</td><td><span class="pill ok">Pass</span></td><td><span class="pill ok">Pass</span></td></tr>
+      </tbody>
+    </table></div>
+    <p>boto3: deploy 2m38s first attempt, destroy 1m31s, no leftovers. Terraform: two first-deploy fixes (empty <code>protocol_configuration { mcp {} }</code> rejected; AgentCore creates runtime log groups itself, so <code>scripts/log_group.py</code> manages retention).</p>
+  </section>
+
+  <!-- ===================================================== CI/CD -->
+  <section class="panel" id="p-cicd" aria-labelledby="h-cicd">
+    <h2 id="h-cicd">CI/CD with Container Images (optional)</h2>
+    <p class="lead">A second delivery mode: GitHub Actions builds arm64 images, pushes to ECR and rolls them out to the existing runtimes. Infrastructure is still applied once by Terraform or boto3; the pipeline never runs Terraform.</p>
+    <p class="src">Source: <code>docs/10-ci-cd.md</code>, <code>docs/ci-cd-integration-patch.md</code></p>
+
+    <div class="callout warn">
+      <p><strong>Status:</strong> designed and checked offline (images build for linux/arm64, <code>terraform validate</code> passes, actionlint passes, rollout request unit-tested against the botocore model). Not run against AWS or on GitHub.</p>
+      <p><strong>Integration pending:</strong> the <code>artifact_type = "code" | "container"</code> switch in the main stacks is written down in <code>ci-cd-integration-patch.md</code> but not applied.</p>
+    </div>
+
+    <h3>Delivery flow: zip vs container</h3>
+    <figure>
+      <svg viewBox="0 0 1200 690" role="img" aria-labelledby="cicd-title cicd-desc" font-family="Segoe UI, Arial, sans-serif">
+        <title id="cicd-title">Delivery flow for zip mode and container mode</title>
+        <desc id="cicd-desc">Zip mode: the developer runs scripts/build.py to cross-build three arm64 zips, then terraform apply or deploy.py uploads them to a versioned S3 bucket, and the runtimes and Lambda pin the S3 version id. Container mode: a push to main runs a GitHub Actions test job, then a build-and-push job that assumes an AWS role through OIDC and pushes arm64 images to ECR, then a deploy job that syncs skills to S3, updates the support MCP runtime, synchronises the Gateway target and updates the agent runtime, then an optional smoke test. The orders Lambda stays a zip in both modes.</desc>
+        <defs>
+          <marker id="ca" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3b4566"/>
+          </marker>
+        </defs>
+        <style>
+          .c-laneA { fill: #f7f8fc; stroke: #c5cbe0; }
+          .c-laneB { fill: #fbfaf5; stroke: #e0d6bd; }
+          .c-grp { fill: #ffffff; stroke: #8d95b8; stroke-dasharray: 5 4; }
+          .c-bx { fill: #eef1ff; stroke: #3b4fd8; stroke-width: 1.4; }
+          .c-st { fill: #e8f5ee; stroke: #1f7a4a; stroke-width: 1.4; }
+          .c-ex { fill: #f4f4f6; stroke: #6b7280; stroke-width: 1.4; }
+          .c-gh { fill: #fff4dc; stroke: #8a5a00; stroke-width: 1.4; }
+          .c-note { fill: #ffffff; stroke: #d9dee5; }
+          .c-ln { stroke: #3b4566; stroke-width: 1.5; fill: none; marker-end: url(#ca); }
+          .c-dash { stroke-dasharray: 5 4; }
+          .c-h { font-weight: 600; fill: #1d232b; font-size: 12.5px; }
+          .c-t { fill: #1d232b; font-size: 11.5px; }
+          .c-m { fill: #5a6573; font-size: 11px; }
+          .c-lt { font-weight: 700; fill: #161b33; font-size: 13px; letter-spacing: .3px; }
+        </style>
+
+        <!-- Lane A: zip mode -->
+        <rect class="c-laneA" x="10" y="10" width="1180" height="250" rx="10"/>
+        <text class="c-lt" x="24" y="33">ZIP MODE (default) · local build → IaC rollout</text>
+
+        <rect class="c-ex" x="30" y="70" width="150" height="140" rx="6"/>
+        <text class="c-h" x="105" y="100" text-anchor="middle">Developer</text>
+        <text class="c-t" x="105" y="122" text-anchor="middle">edits agent/,</text>
+        <text class="c-t" x="105" y="138" text-anchor="middle">mcp_servers/, skills/</text>
+        <text class="c-m" x="105" y="162" text-anchor="middle">local machine</text>
+        <text class="c-m" x="105" y="178" text-anchor="middle">(Windows / x86 OK)</text>
+
+        <rect class="c-bx" x="215" y="70" width="190" height="140" rx="6"/>
+        <text class="c-h" x="310" y="96" text-anchor="middle">scripts/build.py</text>
+        <text class="c-t" x="310" y="116" text-anchor="middle">uv cross-build wheels</text>
+        <text class="c-m" x="310" y="132" text-anchor="middle">aarch64-manylinux2014 · py3.12</text>
+        <text class="c-t" x="310" y="156" text-anchor="middle">→ dist/agent.zip</text>
+        <text class="c-t" x="310" y="172" text-anchor="middle">→ dist/support_mcp.zip</text>
+        <text class="c-t" x="310" y="188" text-anchor="middle">→ dist/orders_lambda.zip</text>
+
+        <rect class="c-bx" x="440" y="70" width="190" height="140" rx="6"/>
+        <text class="c-h" x="535" y="100" text-anchor="middle">IaC apply</text>
+        <text class="c-t" x="535" y="122" text-anchor="middle">terraform apply</text>
+        <text class="c-t" x="535" y="138" text-anchor="middle">or infra/boto3/deploy.py</text>
+        <text class="c-m" x="535" y="162" text-anchor="middle">uploads only changed files</text>
+        <text class="c-m" x="535" y="178" text-anchor="middle">(MD5 / SHA-256 vs ETag)</text>
+
+        <rect class="c-st" x="665" y="70" width="200" height="140" rx="6"/>
+        <text class="c-h" x="765" y="96" text-anchor="middle">S3 artifacts bucket</text>
+        <text class="c-m" x="765" y="113" text-anchor="middle">versioned · public access blocked</text>
+        <text class="c-t" x="765" y="138" text-anchor="middle">artifacts/agent.zip</text>
+        <text class="c-t" x="765" y="154" text-anchor="middle">artifacts/support_mcp.zip</text>
+        <text class="c-t" x="765" y="170" text-anchor="middle">artifacts/orders_lambda.zip</text>
+        <text class="c-t" x="765" y="192" text-anchor="middle">skills/**</text>
+
+        <rect class="c-grp" x="900" y="56" width="280" height="166" rx="8"/>
+        <text class="c-m" x="912" y="73" font-weight="600">Runtimes and Lambda</text>
+        <rect class="c-bx" x="912" y="80" width="256" height="40" rx="5"/>
+        <text class="c-h" x="1040" y="97" text-anchor="middle">Runtime shopassist_agent</text>
+        <text class="c-m" x="1040" y="112" text-anchor="middle">PYTHON_3_12 · arm64 · app.py</text>
+        <rect class="c-bx" x="912" y="126" width="256" height="40" rx="5"/>
+        <text class="c-h" x="1040" y="143" text-anchor="middle">Runtime shopassist_support_mcp</text>
+        <text class="c-m" x="1040" y="158" text-anchor="middle">server.py · :8000/mcp</text>
+        <rect class="c-ex" x="912" y="172" width="256" height="40" rx="5"/>
+        <text class="c-h" x="1040" y="189" text-anchor="middle">Lambda shopassist-orders-tools</text>
+        <text class="c-m" x="1040" y="204" text-anchor="middle">always a zip, in both modes</text>
+
+        <path class="c-ln" d="M180,140 L213,140"/>
+        <path class="c-ln" d="M405,140 L438,140"/>
+        <path class="c-ln" d="M630,140 L663,140"/>
+        <path class="c-ln" d="M865,140 L898,140"/>
+        <text class="c-m" x="872" y="132" text-anchor="middle">pin</text>
+
+        <text class="c-m" x="30" y="240">Runtimes and Lambda pin the S3 object versionId: a rebuilt zip = new version = in-place update. Skill changes need no new zip, only a new session.</text>
+
+        <!-- Lane B: container mode -->
+        <rect class="c-laneB" x="10" y="280" width="1180" height="400" rx="10"/>
+        <text class="c-lt" x="24" y="303">CONTAINER MODE (optional) · GitHub Actions → ECR → UpdateAgentRuntime</text>
+
+        <rect class="c-gh" x="30" y="330" width="150" height="110" rx="6"/>
+        <text class="c-h" x="105" y="354" text-anchor="middle">git push main</text>
+        <text class="c-t" x="105" y="374" text-anchor="middle">path-filtered trigger</text>
+        <text class="c-m" x="105" y="398" text-anchor="middle">or workflow_dispatch</text>
+        <text class="c-m" x="105" y="414" text-anchor="middle">image_tag = &lt;full SHA&gt;</text>
+        <text class="c-m" x="105" y="430" text-anchor="middle">(rollback, skips build)</text>
+
+        <rect class="c-gh" x="215" y="330" width="190" height="110" rx="6"/>
+        <text class="c-h" x="310" y="354" text-anchor="middle">job: test</text>
+        <text class="c-t" x="310" y="376" text-anchor="middle">uv sync --frozen</text>
+        <text class="c-t" x="310" y="392" text-anchor="middle">uv run pytest -q</text>
+        <text class="c-m" x="310" y="414" text-anchor="middle">offline (moto)</text>
+
+        <rect class="c-gh" x="440" y="330" width="190" height="110" rx="6"/>
+        <text class="c-h" x="535" y="354" text-anchor="middle">job: build-and-push</text>
+        <text class="c-t" x="535" y="374" text-anchor="middle">matrix × 2 images</text>
+        <text class="c-t" x="535" y="390" text-anchor="middle">ubuntu-24.04-arm runner</text>
+        <text class="c-t" x="535" y="406" text-anchor="middle">buildx --platform linux/arm64</text>
+        <text class="c-m" x="535" y="426" text-anchor="middle">tags :&lt;sha&gt; + :latest · GHA cache</text>
+
+        <rect class="c-ex" x="440" y="480" width="190" height="60" rx="6"/>
+        <text class="c-h" x="535" y="503" text-anchor="middle">AWS STS (OIDC)</text>
+        <text class="c-m" x="535" y="521" text-anchor="middle">role shopassist-github-ci · 1 h</text>
+
+        <rect class="c-st" x="665" y="330" width="200" height="110" rx="6"/>
+        <text class="c-h" x="765" y="354" text-anchor="middle">Amazon ECR</text>
+        <text class="c-t" x="765" y="376" text-anchor="middle">shopassist-agent:&lt;sha&gt;</text>
+        <text class="c-t" x="765" y="392" text-anchor="middle">shopassist-support-mcp:&lt;sha&gt;</text>
+        <text class="c-m" x="765" y="414" text-anchor="middle">scan on push · keep last 5</text>
+
+        <rect class="c-gh" x="900" y="330" width="280" height="230" rx="6"/>
+        <text class="c-h" x="1040" y="352" text-anchor="middle">job: deploy</text>
+        <text class="c-t" x="914" y="378">1  Check both images exist in ECR</text>
+        <text class="c-t" x="914" y="402">2  aws s3 sync skills/ --delete</text>
+        <text class="c-t" x="914" y="426">3  UpdateAgentRuntime: support MCP</text>
+        <text class="c-m" x="928" y="442">image only, other fields preserved, wait READY</text>
+        <text class="c-t" x="914" y="466">4  SynchronizeGatewayTargets: support</text>
+        <text class="c-m" x="928" y="482">Gateway re-reads the MCP tool list</text>
+        <text class="c-t" x="914" y="506">5  UpdateAgentRuntime: agent (last)</text>
+        <text class="c-m" x="928" y="522">its tool list comes from the Gateway</text>
+        <text class="c-m" x="1040" y="548" text-anchor="middle">scripts/ci/update_runtime_image.py</text>
+
+        <rect class="c-gh" x="900" y="590" width="280" height="70" rx="6"/>
+        <text class="c-h" x="1040" y="613" text-anchor="middle">job: smoke (optional)</text>
+        <text class="c-t" x="1040" y="633" text-anchor="middle">demo_access.py --no-reseed --only b,c,d</text>
+        <text class="c-m" x="1040" y="650" text-anchor="middle">needs DEPLOY_OUTPUTS/USERS_JSON secrets</text>
+
+        <path class="c-ln" d="M180,385 L213,385"/>
+        <path class="c-ln" d="M405,385 L438,385"/>
+        <path class="c-ln" d="M630,385 L663,385"/>
+        <text class="c-m" x="647" y="377" text-anchor="middle">push</text>
+        <path class="c-ln" d="M865,385 L898,385"/>
+        <text class="c-m" x="881" y="377" text-anchor="middle">URIs</text>
+        <path class="c-ln c-dash" d="M535,440 L535,478"/>
+        <text class="c-m" x="543" y="463">AssumeRoleWithWebIdentity</text>
+        <path class="c-ln" d="M1040,560 L1040,588"/>
+
+        <!-- Cross-lane arrows -->
+        <path class="c-ln" d="M960,330 L960,268 L800,268 L800,212"/>
+        <text class="c-m" x="808" y="252">2 · s3 sync skills/</text>
+        <path class="c-ln" d="M1120,330 L1120,224"/>
+        <text class="c-m" x="1114" y="276" text-anchor="end">3 + 5 · UpdateAgentRuntime</text>
+        <path class="c-ln c-dash" d="M865,345 L884,345 L884,146 L910,146"/>
+        <text class="c-m" x="876" y="320" text-anchor="end">runtimes pull image</text>
+
+        <!-- Legend -->
+        <rect class="c-gh" x="30" y="480" width="14" height="14" rx="3"/>
+        <text class="c-m" x="50" y="491">GitHub Actions job</text>
+        <rect class="c-st" x="160" y="480" width="14" height="14" rx="3"/>
+        <text class="c-m" x="180" y="491">artifact storage</text>
+        <rect class="c-bx" x="30" y="504" width="14" height="14" rx="3"/>
+        <text class="c-m" x="50" y="515">build / AgentCore</text>
+        <rect class="c-ex" x="160" y="504" width="14" height="14" rx="3"/>
+        <text class="c-m" x="180" y="515">other AWS / local</text>
+        <path class="c-ln c-dash" d="M30,535 L60,535"/>
+        <text class="c-m" x="68" y="539">auth / pull (no deploy action)</text>
+
+        <rect class="c-note" x="30" y="560" width="840" height="108" rx="6"/>
+        <text class="c-h" x="46" y="582">Rules</text>
+        <text class="c-t" x="46" y="602">• Infra is applied once by Terraform or boto3. The pipeline only swaps images and syncs skills; it never runs Terraform.</text>
+        <text class="c-t" x="46" y="620">• Terraform ignore_changes the container_uri, and boto3 keeps the running image, so re-applies don't roll the image back.</text>
+        <text class="c-t" x="46" y="638">• Mode switch code ↔ container: Terraform replaces both runtimes (new id/ARN, sessions lost); boto3 updates in place.</text>
+        <text class="c-t" x="46" y="656">• Status: designed and checked offline, not yet run on AWS or GitHub. The artifact_type switch is still a pending patch.</text>
+      </svg>
+      <figcaption>Top lane: default zip delivery from a developer machine. Bottom lane: optional container pipeline in <code>.github/workflows/deploy.yml</code>. Numbers on the cross-lane arrows match the deploy-job steps.</figcaption>
+    </figure>
+
+    <h3>Pipeline (<code>.github/workflows/deploy.yml</code>)</h3>
+    <ol class="flow">
+      <li><strong>Trigger:</strong> push to <code>main</code> touching agent, support MCP, common, skills, CI scripts, workflow, <code>pyproject.toml</code> or <code>uv.lock</code>; or manual dispatch.</li>
+      <li><strong>test:</strong> <code>uv sync --frozen</code>, <code>pytest</code> (offline, moto).</li>
+      <li><strong>build-and-push:</strong> matrix per image on <code>ubuntu-24.04-arm</code>, OIDC credentials, buildx <code>linux/arm64</code>, push <code>:&lt;sha&gt;</code> and <code>:latest</code>, GHA layer cache.</li>
+      <li><strong>deploy:</strong> verify images, <code>s3 sync skills/</code>, update support MCP runtime → <code>SynchronizeGatewayTargets</code> → update agent runtime (agent last, since its tool list comes from the Gateway).</li>
+      <li><strong>smoke (optional):</strong> <code>demo_access.py --no-reseed --only b,c,d</code>.</li>
+    </ol>
+
+    <h3>Rollout safety: "read, then update with everything the same"</h3>
+    <p><code>UpdateAgentRuntime</code> replaces the whole spec, so omitted optional fields reset. <code>update_runtime_image.py</code> reads the runtime and copies every updatable field (<code>PRESERVED_FIELDS</code>), replacing only <code>agentRuntimeArtifact</code>. A test fails if botocore adds an updatable field the script doesn't copy.</p>
+    <ul>
+      <li>Refuses code→container switch without <code>--allow-mode-switch</code>.</li>
+      <li>No-op when already on that image (<code>--force</code> overrides); <code>--dry-run</code> available.</li>
+    </ul>
+
+    <h3>Mode switch semantics</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>State</th><th>Config</th><th>Terraform plan</th></tr></thead>
+      <tbody>
+        <tr><td>container <code>:OLD</code></td><td>container <code>:NEW</code></td><td>No changes (URI ignored; CI owns it)</td></tr>
+        <tr><td>container <code>:OLD</code></td><td>container <code>:NEW</code> + other field</td><td>In-place, artifact stays <code>:OLD</code></td></tr>
+        <tr><td>code</td><td>container</td><td><span class="pill risk">Replace</span> new runtime id/ARN, sessions lost</td></tr>
+        <tr><td>container</td><td>code</td><td><span class="pill risk">Replace</span></td></tr>
+      </tbody>
+    </table></div>
+    <p>boto3 differs: a mode switch goes through <code>UpdateAgentRuntime</code> in place.</p>
+
+    <h3>Rollback</h3>
+    <ul>
+      <li>Manual workflow run with <code>image_tag = &lt;older full SHA&gt;</code>: skips build, verifies images exist, syncs <code>skills/</code> from that commit, rolls both runtimes back.</li>
+      <li>ECR keeps the last 5 images per repository; older SHAs may be gone (check fails before changes).</li>
+      <li>Emergency: <code>update_runtime_image.py update-runtime --image &lt;repo&gt;:&lt;old sha&gt;</code> locally.</li>
+    </ul>
+
+    <h3>Security posture</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Control</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr><td>No AWS keys in GitHub</td><td>OIDC, 1-hour credentials; trust requires <code>aud = sts.amazonaws.com</code> and <code>sub</code> = main branch of the repo (no PRs, forks, other branches)</td></tr>
+        <tr><td>Least privilege CI role</td><td>ECR push to 2 repos, S3 under <code>skills/</code>, Get/Update on 2 runtimes, Gateway target sync, scoped <code>iam:PassRole</code>. No Terraform, IAM-write, DynamoDB or Cognito</td></tr>
+        <tr><td>Workflow hygiene</td><td>Minimal <code>permissions</code>, actions pinned to SHAs, <code>persist-credentials: false</code>, validated <code>image_tag</code> via env vars, non-cancelling <code>concurrency</code></td></tr>
+        <tr><td>Images</td><td><code>python:3.12-slim</code>, non-root uid 10001, ECR scan on push, allow-list build context</td></tr>
+        <tr><td>Smoke secrets</td><td><code>DEPLOY_OUTPUTS_JSON</code>, <code>DEPLOY_USERS_JSON</code> (contain demo passwords)</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Zip vs container</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th></th><th>Zip (default)</th><th>Container</th></tr></thead>
+      <tbody>
+        <tr><td>Moving parts</td><td>S3 only</td><td>ECR, Docker, OIDC, CI role</td></tr>
+        <tr><td>Build</td><td>Cross-platform wheels</td><td>Native arm64 Linux; system packages, compiled extensions</td></tr>
+        <tr><td>Reproducibility</td><td>S3 version id</td><td>Tag/digest; same image locally and in AWS</td></tr>
+        <tr><td>Rollout</td><td><code>terraform apply</code>/<code>deploy.py</code></td><td>Pipeline</td></tr>
+        <tr><td>Cost</td><td>~free</td><td>~$0.25/month ECR + CI minutes</td></tr>
+        <tr><td>Fit</td><td>PoC, demos, single developer</td><td>Team flow, push-to-deploy, audit trail</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <!-- ===================================================== COST -->
+  <section class="panel" id="p-cost" aria-labelledby="h-cost">
+    <h2 id="h-cost">Cost</h2>
+    <p class="lead">Everything is on demand. An idle stack costs close to nothing; a demo costs roughly its Bedrock tokens.</p>
+    <p class="src">Source: <code>docs/07-cost.md</code>. All figures there are illustrative; check the official pricing pages.</p>
+
+    <div class="grid">
+      <div class="card"><div class="kpi">~15k / 500</div><h4>Input / output tokens per "return" turn</h4><p>~5 model calls, context growing from ~2k to ~4k tokens.</p></div>
+      <div class="card"><div class="kpi">~40k / 2k</div><h4>Tokens per 3-turn conversation</h4><p>Estimated from prompt and schema sizes, not measured.</p></div>
+      <div class="card"><div class="kpi">Single-digit $</div><h4>100 conversations / month</h4><p>Illustrative total with stack deployed all month.</p></div>
+    </div>
+
+    <h3>Cost drivers</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Service</th><th>Billed on</th><th>Driver here</th><th>Idle</th></tr></thead>
+      <tbody>
+        <tr><td>Bedrock</td><td>Tokens</td><td>Every model call in the loop</td><td>None</td></tr>
+        <tr><td>AgentCore Runtime ×2</td><td>vCPU-s + GB-s per session</td><td>Active sessions, idle timeout</td><td>None</td></tr>
+        <tr><td>AgentCore Gateway</td><td>Requests + tool indexing</td><td>~5–15 requests per conversation; 7 tools</td><td>Tiny</td></tr>
+        <tr><td>AgentCore Policy</td><td>Authorization requests</td><td>Every list/call</td><td>None</td></tr>
+        <tr><td>AgentCore Identity</td><td>Token requests</td><td>Gateway → support tokens</td><td>None</td></tr>
+        <tr><td>Secrets Manager</td><td>Secret-month</td><td>1 managed secret</td><td>Prorated</td></tr>
+        <tr><td>Cognito, Lambda, DynamoDB, S3</td><td>Usage</td><td>Small</td><td>~0 (often free tier)</td></tr>
+        <tr><td>CloudWatch Logs</td><td>Ingest + storage</td><td>7-day retention</td><td>Small</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>What moves the number</h3>
+    <ul>
+      <li>Longer conversations: input tokens grow with turns × calls per turn (full history re-sent).</li>
+      <li>Larger model via <code>model_id</code>.</li>
+      <li>Many long-lived parallel sessions held open on the Runtime.</li>
+      <li>Enabling Gateway semantic tool search (currently off).</li>
+    </ul>
+    <p><strong>Not implemented, possible savings:</strong> Bedrock prompt caching for system prompt and tool specs, shorter tool descriptions, fewer tools per skill.</p>
+
+    <h3>Controls</h3>
+    <ul>
+      <li>7-day log retention; log groups created up front.</li>
+      <li>On-demand only; network mode <code>PUBLIC</code>, so no NAT or VPC endpoints.</li>
+      <li>Optional account-wide $5 monthly budget, alerts at 80% actual and 100% forecasted.</li>
+      <li><code>project=shopassist</code> tags on everything taggable; one-command destroy plus leftover checks.</li>
+    </ul>
+  </section>
+
+  <!-- ===================================================== EXTENSIBILITY -->
+  <section class="panel" id="p-extend" aria-labelledby="h-extend">
+    <h2 id="h-extend">Extensibility</h2>
+    <p class="lead">Three tiers of change, each with a different blast radius.</p>
+    <p class="src">Source: <code>docs/08-extending-with-skills.md</code></p>
+
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Change</th><th>Code change?</th><th>Build?</th><th>Policy edit?</th><th>Activation</th></tr></thead>
+      <tbody>
+        <tr><td>New skill using existing tools</td><td>No</td><td>No</td><td>No</td><td>Upload to S3, new session</td></tr>
+        <tr><td>New Lambda tool on <code>orders</code></td><td>Handler + store + schema</td><td><code>orders_lambda</code></td><td>Viewer allow-list if read-only</td><td>Deploy, new session</td></tr>
+        <tr><td>New MCP tool on <code>support</code></td><td><code>server.py</code></td><td><code>support_mcp</code></td><td>Viewer allow-list if read-only</td><td>Deploy, re-sync target (manual with Terraform), new session</td></tr>
+        <tr><td>New target (server)</td><td>Both IaC paths, emulator, Cedar</td><td>Yes</td><td>Yes</td><td>Agent code still unchanged</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Skill authoring rules</h3>
+    <ol>
+      <li>No endpoints, URLs, credentials or <code>&lt;server&gt;___&lt;tool&gt;</code> names in skills. Declare servers; use plain names.</li>
+      <li>A skill describes, the tool enforces.</li>
+      <li>Folder name equals <code>name</code>.</li>
+      <li><code>description</code> is the trigger: say when to use and when not to.</li>
+      <li>Plan for missing permissions.</li>
+    </ol>
+
+    <h3>Worked example: <code>order-changes</code> skill</h3>
+    <p>Handles address changes and cancellations by checking order status with <code>get_order</code> and opening a <code>high</code>-priority ticket with <code>create_ticket</code>. No new tools. bob's binding marks <code>create_ticket</code> unavailable, so the agent reports order status and explains the permission gap.</p>
+<pre><code>uv run python scripts/local_gateway.py --port 8765
+uv run python scripts/run_local.py --gateway-url http://localhost:8765/mcp \
+  --prompt "Can I change the delivery address of order 1008? I'm C002 ..."
+# then: terraform apply  |  infra/boto3/deploy.py   →   invoke_agent.py --new-session</code></pre>
+
+    <h3>Coupling points to keep in sync when adding a tool</h3>
+    <ul class="check">
+      <li><code>TOOLS</code> in <code>handler.py</code> ↔ <code>tools_schema.json</code> (guarded by <code>test_schema_matches_tools</code>)</li>
+      <li><code>viewer_read_only.cedar</code> allow-list ↔ <code>VIEWER_TOOLS</code> in <code>scripts/local_gateway.py</code> (not test-guarded per docs)</li>
+      <li>Policy creation must follow target update (<code>CreatePolicy</code> validates action names)</li>
+      <li>Skill text references ↔ declared <code>mcp-servers</code> (startup log only)</li>
+    </ul>
+  </section>
+
+  <!-- ===================================================== TESTING -->
+  <section class="panel" id="p-testing" aria-labelledby="h-testing">
+    <h2 id="h-testing">Testing Guide</h2>
+    <p class="lead">Six levels of testing, from offline unit tests to the deployed access matrix. Each level adds real infrastructure, so problems can be isolated to the layer that introduced them.</p>
+    <p class="src">Source: <code>README.md</code> Quick start, <code>docs/04</code> § Smoke test, <code>docs/05</code>, <code>docs/08</code> § Try it locally, <code>docs/09</code>, <code>docs/10</code> § Smoke test, <code>docs/11-chat-ui.md</code></p>
+
+    <figure>
+      <svg viewBox="0 0 1200 250" role="img" aria-labelledby="tst-title tst-desc" font-family="Segoe UI, Arial, sans-serif">
+        <title id="tst-title">Testing levels</title>
+        <desc id="tst-desc">Six testing levels from left to right: offline unit tests; local CLI chat with the Gateway emulator and real Bedrock; local browser chat UI; deployed CLI smoke test; deployed browser chat UI with a real Cognito token; and the demo_access.py access matrix, also run as the optional CI smoke job. A bar underneath shows that AWS dependency grows from none, to Bedrock only, to the full deployed stack.</desc>
+        <defs>
+          <marker id="ta" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#3b4566"/></marker>
+        </defs>
+        <style>
+          .t-off { fill: #f4f4f6; stroke: #6b7280; stroke-width: 1.4; }
+          .t-loc { fill: #fff4dc; stroke: #8a5a00; stroke-width: 1.4; }
+          .t-dep { fill: #e8f5ee; stroke: #1f7a4a; stroke-width: 1.4; }
+          .t-ln { stroke: #3b4566; stroke-width: 1.5; fill: none; marker-end: url(#ta); }
+          .t-n { font-weight: 700; fill: #3b4fd8; font-size: 13px; }
+          .t-h { font-weight: 600; fill: #1d232b; font-size: 12.5px; }
+          .t-t { fill: #1d232b; font-size: 11.5px; }
+          .t-m { fill: #5a6573; font-size: 11px; }
+        </style>
+        <rect class="t-off" x="15" y="20" width="175" height="140" rx="7"/>
+        <text class="t-n" x="28" y="42">1</text><text class="t-h" x="44" y="42">Unit tests</text>
+        <text class="t-t" x="28" y="66">uv run pytest</text>
+        <text class="t-m" x="28" y="88">offline · moto for DynamoDB</text>
+        <text class="t-m" x="28" y="104">rules, store, tools, binding,</text>
+        <text class="t-m" x="28" y="120">auth, IaC request shapes, CI</text>
+        <text class="t-m" x="28" y="146">no AWS, no model</text>
+
+        <rect class="t-loc" x="212" y="20" width="175" height="140" rx="7"/>
+        <text class="t-n" x="225" y="42">2</text><text class="t-h" x="241" y="42">Local CLI chat</text>
+        <text class="t-t" x="225" y="66">local_gateway.py</text>
+        <text class="t-t" x="225" y="82">+ run_local.py</text>
+        <text class="t-m" x="225" y="104">in-memory data</text>
+        <text class="t-m" x="225" y="120">--role admin | viewer</text>
+        <text class="t-m" x="225" y="146">real Bedrock</text>
+
+        <rect class="t-loc" x="409" y="20" width="175" height="140" rx="7"/>
+        <text class="t-n" x="422" y="42">3</text><text class="t-h" x="438" y="42">Local browser chat</text>
+        <text class="t-t" x="422" y="66">agent/app.py on :8080</text>
+        <text class="t-t" x="422" y="82">+ chat_ui.py --local</text>
+        <text class="t-m" x="422" y="104">same HTTP entrypoint</text>
+        <text class="t-m" x="422" y="120">as the Runtime</text>
+        <text class="t-m" x="422" y="146">real Bedrock · dummy token</text>
+
+        <rect class="t-dep" x="606" y="20" width="175" height="140" rx="7"/>
+        <text class="t-n" x="619" y="42">4</text><text class="t-h" x="635" y="42">Deployed CLI smoke</text>
+        <text class="t-t" x="619" y="66">invoke_agent.py</text>
+        <text class="t-t" x="619" y="82">--user alice|bob|carol</text>
+        <text class="t-m" x="619" y="104">signs in to Cognito,</text>
+        <text class="t-m" x="619" y="120">Bearer to the Runtime</text>
+        <text class="t-m" x="619" y="146">full stack</text>
+
+        <rect class="t-dep" x="803" y="20" width="175" height="140" rx="7"/>
+        <text class="t-n" x="816" y="42">5</text><text class="t-h" x="832" y="42">Deployed browser chat</text>
+        <text class="t-t" x="816" y="66">chat_ui.py</text>
+        <text class="t-t" x="816" y="82">+ pasted access token</text>
+        <text class="t-m" x="816" y="104">sample conversations</text>
+        <text class="t-m" x="816" y="120">per user</text>
+        <text class="t-m" x="816" y="146">full stack · real JWT</text>
+
+        <rect class="t-dep" x="1000" y="20" width="185" height="140" rx="7"/>
+        <text class="t-n" x="1013" y="42">6</text><text class="t-h" x="1029" y="42">Access matrix</text>
+        <text class="t-t" x="1013" y="66">demo_access.py</text>
+        <text class="t-m" x="1013" y="88">a alice · b bob · c carol</text>
+        <text class="t-m" x="1013" y="104">d direct Gateway calls</text>
+        <text class="t-m" x="1013" y="120">also the CI smoke job</text>
+        <text class="t-m" x="1013" y="146">pass/fail · exit code</text>
+
+        <path class="t-ln" d="M190,90 L210,90"/><path class="t-ln" d="M387,90 L407,90"/>
+        <path class="t-ln" d="M584,90 L604,90"/><path class="t-ln" d="M781,90 L801,90"/>
+        <path class="t-ln" d="M978,90 L998,90"/>
+
+        <rect class="t-off" x="15" y="185" width="175" height="22" rx="4"/>
+        <text class="t-m" x="102" y="200" text-anchor="middle">no AWS</text>
+        <rect class="t-loc" x="212" y="185" width="372" height="22" rx="4"/>
+        <text class="t-m" x="398" y="200" text-anchor="middle">AWS credentials for Bedrock only</text>
+        <rect class="t-dep" x="606" y="185" width="579" height="22" rx="4"/>
+        <text class="t-m" x="895" y="200" text-anchor="middle">deployed stack (Terraform or boto3) · .deploy/outputs.json + users.json</text>
+        <text class="t-m" x="15" y="235">What each level adds: 2 = model + skills + binding · 3 = HTTP entrypoint + payload contract · 4 = Cognito, Runtime JWT, passthrough, Gateway, Cedar · 5 = manual exploration per user · 6 = automated, enforcement checked without the model.</text>
+      </svg>
+      <figcaption>Run them left to right. A failure at level N with level N-1 passing points at what level N adds.</figcaption>
+    </figure>
+
+    <h3>Level 1 · Unit tests (offline)</h3>
+<pre><code>uv sync
+uv run pytest -q</code></pre>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Area</th><th>Test files</th><th>Notable checks</th></tr></thead>
+      <tbody>
+        <tr><td>Agent</td><td><code>test_agent_app.py</code>, <code>test_agent_skill_binding.py</code>, <code>test_agent_gateway_auth.py</code>, <code>test_agent_tools.py</code>, <code>test_agent_demo.py</code></td><td>Binding hooks, token passthrough, <code>read_skill_resource</code> path safety</td></tr>
+        <tr><td>Tools and data</td><td><code>test_orders_lambda.py</code>, <code>test_support_mcp.py</code>, <code>test_store.py</code></td><td><code>test_schema_matches_tools</code> fails if <code>TOOLS</code> and <code>tools_schema.json</code> disagree; DynamoDB via moto</td></tr>
+        <tr><td>Delivery</td><td><code>test_build.py</code>, <code>test_boto3_shapes.py</code>, <code>test_ci_update_runtime.py</code></td><td>Zip layout; boto3 requests validated against the botocore model; CI rollout copies every updatable runtime field</td></tr>
+      </tbody>
+    </table></div>
+    <p>Run before every build. The same command is the <code>test</code> job in the CI pipeline. Last local run: 194 passed.</p>
+
+    <h3>Level 2 · Local CLI chat (Gateway emulator + real Bedrock)</h3>
+<pre><code>uv run python scripts/local_gateway.py --port 8765                         # terminal 1 (--role viewer for bob)
+uv run python scripts/run_local.py --gateway-url http://localhost:8765/mcp  # terminal 2
+uv run python scripts/run_local.py --gateway-url http://localhost:8765/mcp --prompt "Where is order 1042?"</code></pre>
+    <ul>
+      <li>Needs AWS credentials that can invoke <code>us.anthropic.claude-haiku-5-5</code> in <code>us-east-1</code>. Nothing else in AWS is used.</li>
+      <li>The emulator serves the same 7 tools with in-memory data. <code>--role viewer</code> filters <code>tools/list</code> and rejects writes, like Cedar does for bob.</li>
+      <li><code>--verbose</code> shows binding decisions. Skill edits need a restart, because <code>./skills</code> is read at start.</li>
+      <li>Default emulator port is 8000. Pass <code>--port</code> if it's taken.</li>
+    </ul>
+
+    <h3>Level 3 · Local browser chat</h3>
+<pre><code>uv run python scripts/local_gateway.py --port 8765                       # terminal 1
+$env:PYTHONIOENCODING="utf-8"; $env:GATEWAY_AUTH_MODE="none"; $env:GATEWAY_URL="http://localhost:8765/mcp"
+$env:SKILLS_DIR="$PWD\skills"; $env:AWS_REGION="us-east-1"
+uv run python agent/app.py                                               # terminal 2: agent on :8080
+uv run python scripts/chat_ui.py --local --open                          # terminal 3: http://127.0.0.1:8790</code></pre>
+    <ul>
+      <li>Exercises the real HTTP entrypoint (<code>/invocations</code>, <code>/ping</code>) that AgentCore Runtime calls.</li>
+      <li>Click <em>Dummy token: alice (admin)</em> or <em>bob (viewer)</em>. Locally the token isn't checked. Tools come from the emulator's <code>--role</code>.</li>
+      <li>Not reproducible locally: carol's 401/403 (no Runtime authorizer) and per-session memory (one conversation per process; restart <code>app.py</code> to reset).</li>
+    </ul>
+    <div class="callout warn"><p><strong>Windows:</strong> without <code>PYTHONIOENCODING=utf-8</code>, <code>app.py</code> exits silently on the first error. Strands prints a <code>└</code> character the cp1252 console can't encode.</p></div>
+
+    <h3>Level 4 · Deployed CLI smoke test</h3>
+<pre><code>uv run python scripts/invoke_agent.py --user alice --prompt "Where is order 1042?"
+uv run python scripts/invoke_agent.py --user bob   --prompt "I'm C001. Please return the headphones from order 1042."
+uv run python scripts/invoke_agent.py --user carol --prompt "Hello"
+uv run python scripts/invoke_agent.py --user alice                     # interactive; /new = new session</code></pre>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>User</th><th>Expected</th></tr></thead>
+      <tbody>
+        <tr><td>alice</td><td>Delivery status and date of 1042; <code>skills: order-tracking | tools: orders___get_order</code></td></tr>
+        <tr><td>bob</td><td>Eligibility and $199.99 refund, then "your account can't create returns"; no <code>orders___create_return</code></td></tr>
+        <tr><td>carol</td><td><code>Access denied (HTTP 401/403)</code>, exit code 3</td></tr>
+      </tbody>
+    </table></div>
+    <p>The first call of a session includes a cold start (microVM, S3 skill sync, Gateway tool listing), so expect 10–30 s. The session id per user is kept in <code>.deploy/session-&lt;user&gt;.txt</code>; <code>--new-session</code> starts a fresh one (needed after a skill change).</p>
+
+    <h3>Level 5 · Deployed browser chat with a real JWT</h3>
+<pre><code>uv run python scripts/chat_ui.py --open                    # http://127.0.0.1:8790
+uv run python scripts/chat_ui.py --print-token alice       # another terminal: prints alice's access token</code></pre>
+    <p>Paste the token, click <em>Use token</em>, then chat or run a sample conversation. The page shows the token's username, groups, <code>token_use</code>, <code>client_id</code> and expiry, and warns about ID tokens, expired tokens, a foreign client id or a missing group. Restart <code>chat_ui.py</code> after a redeploy (it reads <code>outputs.json</code> at start).</p>
+    <div class="callout"><p><strong>Relay design.</strong> The Runtime doesn't answer CORS preflights, so <code>chat_ui.py</code> serves the page and relays messages. It binds to <code>127.0.0.1</code>, refuses foreign Host/Origin headers, forwards only to the target fixed at start-up, and never logs or stores tokens.</p></div>
+
+    <h4>Getting a JWT</h4>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Option</th><th>When</th><th>How</th></tr></thead>
+      <tbody>
+        <tr><td>A · Helper</td><td>On the machine that deployed</td><td><code>chat_ui.py --print-token alice</code> (password from <code>.deploy/users.json</code>)</td></tr>
+        <tr><td>B · AWS console (CloudShell)</td><td>Console access only, no local CLI</td><td>Steps below</td></tr>
+        <tr><td>C · Local AWS CLI</td><td>CLI available</td><td>Same <code>initiate-auth</code> command as option B</td></tr>
+      </tbody>
+    </table></div>
+    <ol class="flow">
+      <li>In the console, switch to the deployment's region (default <code>us-east-1</code>).</li>
+      <li>Open <strong>Amazon Cognito → User pools → <code>shopassist-pool</code> → App clients</strong> (left menu under <em>Applications</em>) → <code>shopassist-users</code>. Copy the <em>Client ID</em> (also <code>cognito_users_client_id</code> in <code>outputs.json</code>).</li>
+      <li>Optional: <strong>Users → alice → Group memberships</strong> should show <code>shop-admin</code> (bob: <code>shop-viewer</code>, carol: none).</li>
+      <li>Open <strong>CloudShell</strong> from the console's top bar.</li>
+      <li>Run the sign-in command and copy the single <code>eyJ…</code> line into the chat page.</li>
+    </ol>
+<pre><code>aws cognito-idp initiate-auth --region us-east-1 --auth-flow USER_PASSWORD_AUTH \
+  --client-id &lt;shopassist-users client id&gt; \
+  --auth-parameters 'USERNAME=alice,PASSWORD=&lt;password from .deploy/users.json&gt;' \
+  --query AuthenticationResult.AccessToken --output text</code></pre>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Token rule</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Use the <strong>AccessToken</strong>, not the IdToken</td><td>The Runtime authorizer checks <code>client_id</code>, which only access tokens carry</td></tr>
+        <tr><td>Must come from <code>shopassist-users</code></td><td>M2M (client_credentials) tokens are accepted by the Gateway but rejected by the agent runtime</td></tr>
+        <tr><td>Valid for 60 minutes</td><td><code>AccessTokenValidity = 60</code></td></tr>
+        <tr><td>No console "View login page"</td><td>The users client has no OAuth flows or callback URL, only <code>ALLOW_USER_PASSWORD_AUTH</code></td></tr>
+        <tr><td>Don't reset demo passwords in the console</td><td><code>.deploy/users.json</code> would stop matching, breaking the scripts and <code>--print-token</code></td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Level 6 · Access matrix (<code>demo_access.py</code>)</h3>
+<pre><code>uv run python scripts/demo_access.py                  # re-seeds, runs b, c, d, a
+uv run python scripts/demo_access.py --only b,d       # subset
+uv run python scripts/demo_access.py --no-reseed --timeout 300</code></pre>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>#</th><th>Scenario</th><th>Pass condition</th><th>Enforced by</th></tr></thead>
+      <tbody>
+        <tr><td>a</td><td>alice returns the 1042 headphones</td><td><code>orders___create_return</code> used</td><td>All layers allow</td></tr>
+        <tr><td>b</td><td>bob asks the same</td><td>No <code>create_return</code>; reply mentions permission</td><td>Cedar hides the tool, skill explains</td></tr>
+        <tr><td>c</td><td>carol calls the agent</td><td>HTTP 401/403</td><td>Runtime JWT authorizer (claim rule)</td></tr>
+        <tr><td>d</td><td>Direct Gateway calls, no agent</td><td>bob's <code>tools/list</code> has 5 tools; bob's <code>tools/call create_return</code> denied; alice sees 7</td><td>AgentCore Policy</td></tr>
+      </tbody>
+    </table></div>
+    <p>Prints a table and exits non-zero on any unexpected outcome. Scenario d proves enforcement doesn't depend on the model. In CI the optional <code>smoke</code> job runs <code>--no-reseed --only b,c,d</code>, using the <code>DEPLOY_OUTPUTS_JSON</code> and <code>DEPLOY_USERS_JSON</code> secrets. It skips <code>a</code> because it creates a real return.</p>
+
+    <h3>Sample conversations (from <code>data/seed.json</code>)</h3>
+    <p>Built into the chat UI as clickable, runnable conversations. They also work as typed prompts in levels 2 and 4. Replies are paraphrased; the model words them differently each time.</p>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>User</th><th>Conversation</th><th>Expected outcome</th><th>Tools</th></tr></thead>
+      <tbody>
+        <tr><td>alice</td><td>"I'm C001, what have I ordered?" → "Where is order 1042?"</td><td>1042, 1007, 1001, 1002 newest first; 1042 delivered 5 days ago by UPS</td><td><code>list_customer_orders</code>, <code>get_order</code></td></tr>
+        <tr><td>alice</td><td>"Return the headphones from 1042" → "Yes, go ahead"</td><td>Eligible (5 of 15 days), $199.99, then <code>RET-…</code> and a label link</td><td><code>check_return_eligibility</code>, <code>create_return</code></td></tr>
+        <tr><td>alice</td><td>Lamp 1002 · beanie 1007 · smartwatch 1004 · swimsuit 1005</td><td>Refused: 45 &gt; 30 days · already returned (gloves still OK) · 20 &gt; 15 days (ticket offered) · final sale</td><td><code>check_return_eligibility</code></td></tr>
+        <tr><td>alice</td><td>"1006 shipped ages ago, I'm C003" → "Ticket status?"</td><td>Shipped via UPS; <code>TCK-…</code> opened; status OPEN</td><td><code>create_ticket</code>, <code>get_ticket</code></td></tr>
+        <tr><td>alice</td><td>"How long does shipping take?" → "Write me a poem"</td><td>FAQ answer; off-topic redirect</td><td><code>search_faq</code></td></tr>
+        <tr><td>bob</td><td>"I'm C002, my orders?" → 1008 → 1009</td><td>1008 processing (no tracking), 1009 cancelled</td><td><code>list_customer_orders</code>, <code>get_order</code></td></tr>
+        <tr><td>bob</td><td>Speaker 1003 · items of 1004</td><td>Eligible $59.99 · T-shirts $57.00 yes, smartwatch no</td><td><code>check_return_eligibility</code></td></tr>
+        <tr><td>bob</td><td>"Return the 1042 headphones" → "Create it anyway"</td><td>Eligible but no permission; no workaround</td><td>no <code>create_return</code></td></tr>
+        <tr><td>bob</td><td>"Open a ticket for 1006, I'm C003" → FAQ on late deliveries</td><td>Status given, can't open tickets; FAQ works</td><td>no <code>create_ticket</code>; <code>search_faq</code></td></tr>
+        <tr><td>carol</td><td>"Hello"</td><td>HTTP 401/403, agent never runs (deployed only)</td><td>n/a</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Test data and resets</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Situation</th><th>Reset</th></tr></thead>
+      <tbody>
+        <tr><td>Deployed: 1042 says "already returned" after alice's return</td><td><code>uv run python scripts/seed_data.py --region &lt;region&gt;</code> (<code>demo_access.py</code> re-seeds unless <code>--no-reseed</code>)</td></tr>
+        <tr><td>Local: same</td><td>Restart <code>local_gateway.py</code> (memory store)</td></tr>
+        <tr><td>Return windows drifted</td><td>Re-seed: dates are relative (<code>delivered_days_ago</code>) and resolved at seed time</td></tr>
+        <tr><td>Agent doesn't use a new skill</td><td>Deployed: <code>--new-session</code> or <em>New session</em>. Local: restart the agent</td></tr>
+        <tr><td>Order of runs</td><td>Run bob's 1042 conversation before alice's return, or re-seed between runs</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Testing a new skill or tool</h3>
+    <ol class="flow">
+      <li>Write the skill or tool. For tools: <code>uv run pytest</code> (schema/TOOLS parity), then update the Cedar viewer allow-list and <code>VIEWER_TOOLS</code> in <code>local_gateway.py</code>.</li>
+      <li>Level 2 or 3 locally with both <code>--role admin</code> and <code>--role viewer</code>. Check the <code>skills:</code> / <code>tools:</code> line.</li>
+      <li>Deploy (<code>terraform apply</code> or <code>deploy.py</code>). For a support MCP tool with Terraform, re-sync the Gateway target.</li>
+      <li>Level 4 or 5 with <code>--new-session</code>; check the runtime log shows the new skill count.</li>
+      <li>Level 6 to confirm the access matrix still passes.</li>
+    </ol>
+
+    <h3>Quick troubleshooting while testing</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Symptom</th><th>Level</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td><code>ExpiredTokenException</code> / <code>AccessDeniedException</code> from Bedrock</td><td>2–3</td><td>Refresh AWS credentials; check model access and region</td></tr>
+        <tr><td><code>address already in use</code> / <code>Errno 10048</code></td><td>2–3</td><td>Use <code>--port</code> on the emulator</td></tr>
+        <tr><td>"couldn't reach the agent: ConnectError"</td><td>3</td><td><code>app.py</code> not running on :8080 or crashed (see the Windows note)</td></tr>
+        <tr><td>Relay error 421/403</td><td>3, 5</td><td>Open via <code>127.0.0.1</code> or <code>localhost</code> on the same port</td></tr>
+        <tr><td>401/403 for alice or bob</td><td>4–6</td><td>Token expired, ID token used, M2M token, or <code>.deploy/</code> from an older deployment</td></tr>
+        <tr><td>"no Authorization header reached the agent"</td><td>4–6</td><td>Runtime header allowlist missing (<code>requestHeaderAllowlist = ["Authorization"]</code>)</td></tr>
+        <tr><td>No <code>support___*</code> tools</td><td>4–6</td><td>Support MCP runtime not READY at target creation; <code>synchronize-gateway-targets</code></td></tr>
+      </tbody>
+    </table></div>
+    <p class="src">Full lists: <code>docs/09-troubleshooting.md</code>, <code>docs/11-chat-ui.md</code> § Troubleshooting</p>
+  </section>
+
+  <!-- ===================================================== RISKS & REVIEW -->
+  <section class="panel" id="p-review" aria-labelledby="h-review">
+    <h2 id="h-review">Risks, Gaps &amp; Review Agenda</h2>
+    <p class="lead">Production hardening items from the docs, open questions, documentation inconsistencies found while compiling this pack, and suggested discussion points.</p>
+
+    <h3>Production hardening (from <code>docs/03</code>)</h3>
+    <div class="tbl-wrap"><table>
+      <thead><tr><th>Area</th><th>Severity</th><th>PoC choice</th><th>Production direction</th></tr></thead>
+      <tbody>
+        <tr><td>Customer identity binding</td><td><span class="pill risk">High</span></td><td>Customer id is whatever the user types</td><td>Derive customer from token claim; enforce in tools or Cedar (<code>customer_id</code> tag condition)</td></tr>
+        <tr><td>Prompt injection</td><td><span class="pill risk">High</span></td><td>Tool output and FAQ text trusted</td><td>Bedrock Guardrails, output validation, treat tool text as data</td></tr>
+        <tr><td>User sign-in</td><td><span class="pill risk">High</span></td><td><code>USER_PASSWORD_AUTH</code>, passwords on disk and in TF state</td><td>Hosted UI / auth code + PKCE, MFA</td></tr>
+        <tr><td>Gateway error detail</td><td><span class="pill warn">Medium</span></td><td><code>exception_level = DEBUG</code></td><td>Default (no details to callers)</td></tr>
+        <tr><td>Network</td><td><span class="pill warn">Medium</span></td><td><code>PUBLIC</code> mode</td><td>VPC mode, VPC endpoints, private DynamoDB</td></tr>
+        <tr><td>IaC state</td><td><span class="pill warn">Medium</span></td><td>Local state / <code>state.json</code></td><td>Remote state + locking, CI pipeline</td></tr>
+        <tr><td>Policy rollout</td><td><span class="pill warn">Medium</span></td><td>Straight to <code>ENFORCE</code></td><td><code>LOG_ONLY</code> first, then <code>ENFORCE</code></td></tr>
+        <tr><td>Data protection</td><td><span class="pill warn">Medium</span></td><td>No PII protection</td><td>CMKs, PITR, retention, PII redaction in logs</td></tr>
+        <tr><td>Observability</td><td><span class="pill warn">Medium</span></td><td>Logs only</td><td>OTEL traces, dashboards, alarms on errors and policy denials</td></tr>
+        <tr><td>Conversation memory</td><td><span class="pill warn">Medium</span></td><td>In-process per microVM; lost on idle timeout or redeploy; 40-message window</td><td>AgentCore Memory or a Strands session manager (S3/DynamoDB); explicit Runtime lifecycle timeouts</td></tr>
+        <tr><td>Tokens</td><td><span class="pill info">Low</span></td><td>60-min access tokens, re-sign-in per run</td><td>Short-lived tokens, refresh, revocation</td></tr>
+        <tr><td>Least privilege</td><td><span class="pill info">Low</span></td><td><code>dynamodb:Scan</code> granted but unused</td><td>Trim to what code calls</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>Open questions (from the CI/CD patch)</h3>
+    <ol>
+      <li><strong>Pinned dependencies.</strong> <code>requirements.txt</code> uses <code>&gt;=</code> ranges for both zips and images, so two builds of one commit can differ. Export a lock per artifact from <code>uv.lock</code>?</li>
+      <li><strong>Observability.</strong> Neither delivery mode wraps the process in <code>opentelemetry-instrument</code>. Add ADOT?</li>
+      <li><strong>Extra IAM for <code>UpdateAgentRuntime</code>.</strong> Untested; caller may need workload-identity or ECR read actions.</li>
+      <li><strong>Gateway id format.</strong> CI policy assumes <code>gateway/&lt;prefix&gt;-gateway-*</code>.</li>
+    </ol>
+
+    <h3>Documentation inconsistencies to resolve</h3>
+    <div class="callout warn">
+      <ul>
+        <li><code>04-deploy-terraform.md</code> and <code>05-deploy-boto3.md</code> both say "No AWS deployment of this repo has been verified yet", but each ends with a "Verified run (2026-10-29)" section. <code>06-terraform-vs-boto3.md</code> also says no deployment has been run and that the comparison isn't based on measured times, though 05 reports measured deploy/destroy times.</li>
+        <li>Docs 01, 02 and 09 describe carol's rejection as HTTP 403; both verified runs observed HTTP 401. The demo script accepts either, but the user-facing description should match.</li>
+        <li><code>03-architecture.md</code> states "Direct code deployment, so no Docker or ECR is needed" without the "by default" qualifier the patch calls for.</li>
+        <li><code>10-ci-cd.md</code> embeds a specific AWS account id and GitHub repository path. Consider parameterising before sharing the docs more widely.</li>
+      </ul>
+    </div>
+
+    <h3>Suggested review agenda</h3>
+    <div class="grid">
+      <div class="card"><h4>Identity &amp; tenancy</h4><p>How should customer identity bind to the caller? Claim-based <code>customer_id</code> in Cedar vs enforcement inside tools. What happens for staff acting on behalf of customers?</p></div>
+      <div class="card"><h4>Trust boundary of the model</h4><p>Which guardrails are prompt-only (no duplicate tickets, no invented data, no promises)? Which should move into tools or policy?</p></div>
+      <div class="card"><h4>Skills as a supply chain</h4><p>Skills in S3 change behaviour without code review gates. Who can write <code>skills/</code>? Should skills be signed, versioned per release or pinned per session?</p></div>
+      <div class="card"><h4>Token passthrough design</h4><p>Process-wide token relay plus per-<code>sub</code> agent rebuild: is it safe if a microVM ever serves more than one user? Is the lock adequate under concurrency?</p></div>
+      <div class="card"><h4>Policy lifecycle</h4><p>Ordering constraints (targets before policies), <code>LOG_ONLY</code> rollout, keeping <code>VIEWER_TOOLS</code> and Cedar in sync, testing policies in CI.</p></div>
+      <div class="card"><h4>IaC strategy</h4><p>Terraform as the system of record, boto3 as reference? Remote state, secret exposure in state, provider lag for AgentCore features.</p></div>
+      <div class="card"><h4>Delivery model</h4><p>Zip vs container as default for a team setting. Mode switch replaces runtimes; plan the cutover and session impact.</p></div>
+      <div class="card"><h4>Operability</h4><p>Tracing, alarms on policy denials, session idle timeouts and Runtime cost under parallel load, cold-start latency budget.</p></div>
+    </div>
+
+    <h3>Reviewer checklist</h3>
+    <ul class="check">
+      <li>☐ Access control does not depend on model behaviour (verified by direct Gateway calls)</li>
+      <li>☐ Business rules enforced in tools, with server-side re-checks on writes</li>
+      <li>☐ Least privilege per role; confused-deputy conditions on trust policies</li>
+      <li>☐ Secrets handling acceptable for target environment (TF state, <code>.deploy/</code>, CI secrets)</li>
+      <li>☐ Skill-change process has an owner and review gate</li>
+      <li>☐ Observability sufficient to investigate a wrong refund or a policy denial</li>
+      <li>☐ Teardown and leftover checks are reliable for shared accounts</li>
+      <li>☐ Documentation status statements match the verified runs</li>
+    </ul>
+  </section>
+
+  </div>
+</div>
+</main>
+
+<footer>Compiled from <code>docs/01-use-case.md</code> through <code>docs/11-chat-ui.md</code>, <code>README.md</code> and <code>docs/ci-cd-integration-patch.md</code>. Cost figures are illustrative per <code>docs/07-cost.md</code>.</footer>
+</body>
+</html>

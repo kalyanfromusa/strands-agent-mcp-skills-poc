@@ -7,7 +7,9 @@
 # Where it fits
 #   The bucket name is predictable (shopassist-tfstate-<account>-<region>), so it is written into the
 #   committed backend files infra/terraform/platform/backend.hcl and infra/terraform/envs/<env>.backend.hcl.
-#   The platform stack derives the same name to scope the CI roles' state access.
+#   The platform stack derives the same name to scope the CI roles' state access, and the main stack
+#   derives it to read the platform's state. So no stack reads these outputs; they are there for
+#   inspection (`terraform output` in this folder) and debugging.
 #
 # Step by step
 #   1. Terraform reads the values from the resources in main.tf.

@@ -16,6 +16,7 @@
 # =====================================================================================================
 
 # Used to build unique names: <name_prefix>-orders, <name_prefix>-artifacts-<account_id>-<region>.
+# name_prefix includes the environment, e.g. shopassist-prod. region is also passed to the seed script.
 variable "name_prefix" { type = string }
 variable "region" { type = string }
 variable "account_id" { type = string }

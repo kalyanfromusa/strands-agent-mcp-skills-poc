@@ -1,0 +1,9 @@
+{
+  // Every new integrated terminal in this workspace uses the default AWS profile.
+  "terminal.integrated.env.windows": {
+    "PYTHONIOENCODING": "utf-8",
+    "AWS_REGION": "us-west-2",
+    "AWS_PROFILE": "default"
+
+  }
+}

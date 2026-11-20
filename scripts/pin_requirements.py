@@ -12,9 +12,11 @@ What this file does
 
 Where it fits
     Run it after changing a requirements.in or after `uv lock --upgrade`. tests/test_pinned_requirements.py
-    checks offline that every pinned version matches uv.lock, so the images and local development
+    checks offline that every pinned version matches uv.lock, and the CI test job
+    (.github/workflows/_checks.yml) runs this script with --check, so the images and local development
     (`uv run`) always use the same versions. The orders and role-mapper Lambdas need no extra packages
-    (boto3 comes with the Lambda base image), so they have no lock file.
+    (the orders code only needs boto3, which comes with the Lambda base image; the role mapper uses
+    only Python's standard library), so they have no lock file.
 
 Step by step
     1. Export the whole project's resolved versions from uv.lock as a constraints file (no hashes).
@@ -25,7 +27,10 @@ Step by step
 Key terms
     Lock file: a list of exact package versions, so installs are repeatable.
     Constraint: "if you install this package, use exactly this version", without forcing it in.
-    Hash: a fingerprint of the package file; pip refuses a download whose fingerprint differs.
+    Hash: a fingerprint of the package file (SHA-256); the installer refuses a download whose
+      fingerprint differs.
+    aarch64-manylinux2014: the label for "Linux on 64-bit ARM" packages that work on most Linux systems;
+      it makes uv pick the right pre-built package files even when this script runs on Windows or a Mac.
 """
 
 from __future__ import annotations
@@ -62,7 +67,11 @@ def run(cmd: list[str]) -> str:
 
 
 def compile_lock(req_in: Path, constraints: Path) -> str:
-    """Step 2: resolve one image's requirements against uv.lock's versions, for linux/arm64, with hashes."""
+    """Step 2: resolve one image's requirements against uv.lock's versions, for linux/arm64, with hashes.
+
+    Returns the full lock-file text: a two-line "generated, don't edit" header plus uv's output, with
+    Unix line endings so the file is identical whether it was generated on Windows or Linux.
+    """
     rel = req_in.relative_to(ROOT).as_posix()
     out = run([
         "uv", "pip", "compile", rel,
@@ -81,18 +90,21 @@ def compile_lock(req_in: Path, constraints: Path) -> str:
 
 
 def main() -> int:
+    """Write (or with --check, compare) every image's lock file. Returns 1 if any is out of date."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--check", action="store_true", help="fail if a lock file differs instead of writing it")
     args = parser.parse_args()
 
-    # Step 1: every resolved version of the project, as constraints.
+    # Step 1: every resolved version of the project, as constraints (--frozen: read uv.lock as it is,
+    # never update it; no development-only packages; not the project itself). The temporary folder
+    # and its constraints file are deleted automatically at the end of the `with` block.
     exported = run(["uv", "export", "--frozen", "--no-hashes", "--no-dev", "--no-emit-project", "--quiet"])
     stale = []
     with tempfile.TemporaryDirectory() as tmp:
         constraints = Path(tmp) / "constraints.txt"
         constraints.write_text(exported, encoding="utf-8")
 
-        # Steps 2 and 3, per image.
+        # Steps 2 and 3, per image. With --check nothing is written; out-of-date files are collected.
         for name, req_in in IMAGES.items():
             wanted = compile_lock(req_in, constraints)
             target = lock_path(req_in)

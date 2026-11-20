@@ -3,18 +3,20 @@
 Relative dates (`*_days_ago`) are resolved to ISO dates at seed time, so re-run it before a demo
 to refresh the return windows. Returns and tickets tables are left untouched.
 
-Usage: uv run python scripts/seed_data.py --region us-east-1 [--prefix shopassist]
+Usage: uv run python scripts/seed_data.py --region us-east-1 --prefix shopassist-prod
 
 What this file does
     Loads the demo orders (customers C001 to C003, orders 1001 to 1009 and the demo order 1042) into
     the real DynamoDB orders table in AWS.
 
 Where it fits
-    Run it once after deploying, and again before a demo. Why again: the seed file says "delivered 5
-    days ago", not a fixed date, so re-seeding moves every delivery date up to today and resets items
-    that were returned during an earlier demo. `scripts/demo_access.py` calls `seed` itself before
-    its return scenarios. Locally (memory mode) this script is not needed: the store reads
-    `data/seed.json` directly.
+    Terraform runs it automatically (modules/data, terraform_data "seed", when seed_data = true, as in
+    both envs/*.tfvars) after the tables are created, and again whenever data/seed.json changes or a
+    table is re-created; it passes --prefix shopassist-<env>. Run it by hand before a demo. Why again:
+    the seed file says "delivered 5 days ago", not a fixed date, so re-seeding moves every delivery
+    date up to today and resets items that were returned during an earlier demo.
+    `scripts/demo_access.py` calls `seed` itself before its return scenarios (unless --no-reseed).
+    Locally (memory mode) this script is not needed: the store reads `data/seed.json` directly.
 
 Step by step
     1. Read data/seed.json and turn each "N days ago" into a real date (`load_seed_orders`).
@@ -25,7 +27,10 @@ Key terms
     Seed data: the made-up starting data for a demo.
     Idempotent: running it twice gives the same result as running it once (no duplicate orders).
     Region: the AWS data-centre area the stack is deployed in, e.g. us-east-1.
-    Prefix: the name start shared by all deployed resources (default "shopassist").
+    Prefix: the name start shared by one environment's resources: shopassist-<env>, e.g. shopassist-prod
+      (table shopassist-prod-orders). The built-in default "shopassist" predates the per-environment
+      names and matches no deployed table, so always pass --prefix.
+    DynamoDB: AWS's key-value database; Decimal: the exact number type it requires instead of floats.
 """
 
 from __future__ import annotations
@@ -45,6 +50,7 @@ def seed(region: str, prefix: str = "shopassist", dynamodb: Any = None) -> int:
     """Write every seed order to `<prefix>-orders`; returns the number of orders written.
 
     Tests pass a fake `dynamodb` (from the moto library); normally a real boto3 connection is made.
+    `prefix` must be the environment's prefix (shopassist-<env>); see "Prefix" above.
     """
     if dynamodb is None:
         import boto3

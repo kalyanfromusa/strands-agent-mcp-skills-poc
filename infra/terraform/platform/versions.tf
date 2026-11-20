@@ -21,6 +21,7 @@
 #     change the same stack at the same time (no DynamoDB lock table needed).
 # =====================================================================================================
 
+# Step 1: the versions this stack accepts, and the (partial) S3 backend.
 terraform {
   required_version = ">= 1.10"
 
@@ -35,6 +36,7 @@ terraform {
   backend "s3" {}
 }
 
+# Step 2: the AWS connection: region and the tags added to every resource.
 provider "aws" {
   region = var.region
 

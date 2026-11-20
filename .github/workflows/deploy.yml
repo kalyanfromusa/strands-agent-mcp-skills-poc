@@ -7,7 +7,8 @@
 #     image_tag   the full git SHA to deploy. Empty = the commit you run it on (the head of main).
 #                 An older SHA that is still in ECR = a rollback (ECR keeps current + previous).
 #   Jobs:
-#     1. prepare  checks the inputs, that the SHA is on main, and runs the unit tests.
+#     1. prepare  checks the inputs, that the SHA is on main, that prod still requires a reviewer in
+#                 GitHub's settings, and runs the unit tests.
 #     2. plan     read-only `terraform plan` with the plan role. Its summary (addresses + actions,
 #                 no values) is what you review on the approval screen.
 #     3. deploy   waits in the GitHub environment <target_env> (prod: you must approve). Then, with the
@@ -16,6 +17,10 @@
 #                 applies it, and runs the access smoke test (scenarios b, c, d) against the result.
 #                 If it fails before Terraform started changing anything, it deletes the images it
 #                 pushed, so ECR still holds exactly "current + previous".
+#
+#   Smoke test scenarios (scripts/demo_access.py): b = bob (viewer) can't create a return; c = carol
+#   (no group) is turned away at sign-in; d = direct Gateway calls show bob only the read tools and
+#   alice all of them. Scenario a (alice really creates a return) is left out: it changes demo data.
 #
 # Where it fits
 #   Pull requests (ci.yml) and merges (build.yml) only check and build. Nothing deploys automatically.
@@ -28,6 +33,17 @@
 #   - Public logs: Terraform's own output goes to files that are never printed or uploaded. The demo
 #     users' passwords that Terraform writes for the smoke test are deleted at the end of the job.
 #   - Inputs reach the shell only through environment variables, after validation.
+#
+# Key terms
+#   OIDC (OpenID Connect): GitHub gives the job a signed identity token; AWS trades it for short-lived
+#     credentials of one IAM role (IAM = AWS Identity and Access Management, AWS's permission system).
+#   ECR (Elastic Container Registry): AWS's private storage for the container images.
+#   SHA: the 40-character fingerprint of a git commit; every image is tagged with the SHA it came from.
+#   GitHub environment: a named deploy target (prod, dev) with its own protection rules (required
+#     reviewer, allowed branches), secrets and variables.
+#   Plan hash: a fingerprint of the plan's "address + action" list (scripts/tf_plan_summary.py), used to
+#     prove that what is applied is exactly what was approved.
+#   Entra: Microsoft Entra ID, the optional company sign-in federated into Cognito (off by default).
 #
 # Repository variables: AWS_REGION, AWS_PLAN_ROLE, DEPLOY_DEV. Environment variable: AWS_APPLY_ROLE.
 # =====================================================================================================
@@ -54,6 +70,7 @@ concurrency:
   group: deploy-${{ inputs.target_env }}
   cancel-in-progress: false
 
+# For every job: Terraform must never stop to ask a question (no one could answer it).
 env:
   TF_IN_AUTOMATION: "1"
   TF_INPUT: "0"
@@ -72,6 +89,9 @@ jobs:
           persist-credentials: false
           fetch-depth: 0 # needed to check that image_tag is a commit on main
 
+      # Refuse to go on unless: the run is on main; dev is only used when DEPLOY_DEV = true; the tag is
+      # a full 40-character SHA (empty = this run's commit); and that commit is part of main's history.
+      # The chosen SHA is handed to the later jobs as this job's output "sha".
       - name: Check inputs
         id: inputs
         env:
@@ -94,6 +114,7 @@ jobs:
 
       # The prod gate lives in GitHub settings, where it can be switched off by accident (it was, once).
       # Refuse to run against prod unless the environment really has a required reviewer.
+      # It asks GitHub's API (with this run's read-only token) for the environment's protection rules.
       - name: Check that ${{ inputs.target_env }} still requires a reviewer
         if: inputs.target_env == 'prod'
         shell: bash
@@ -107,6 +128,7 @@ jobs:
             *) echo "::error::GitHub environment ${TARGET_ENV} has no required reviewer (rules: ${rules:-none}). Add one in Settings → Environments → ${TARGET_ENV} before deploying or destroying."; exit 1 ;;
           esac
 
+      # The unit tests once more, on the exact code being deployed (offline, no AWS).
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           python-version: "3.12"
@@ -145,6 +167,10 @@ jobs:
           role-to-assume: ${{ vars.AWS_PLAN_ROLE }}
           role-session-name: gha-deploy-plan-${{ github.run_id }}
           aws-region: ${{ vars.AWS_REGION }}
+      # Plan into private files (only error lines are ever shown), then publish two things:
+      #   - the address-only summary on the run page, which is what the approver reads;
+      #   - the plan hash as the job output "hash", which the deploy job compares against.
+      # -lock=false: this plan only reads, so it doesn't hold the state lock. The raw files are deleted.
       - name: terraform plan (output kept private; summary only)
         id: plan
         working-directory: infra/terraform
@@ -160,6 +186,9 @@ jobs:
           rm -f tfplan plan.json plan.log init.log
 
   # ------------------------------------------------------------------ 3. approved: push, apply, smoke
+  # Step order: checkout x2 → tools → AWS credentials → find + build + push missing images → re-plan
+  # and compare hashes → apply → smoke test → (on early failure) delete pushed images → clean up files.
+  # Runs on an arm64 runner so the images can be built natively if they aren't in ECR yet.
   deploy:
     needs: [prepare, plan]
     runs-on: ubuntu-24.04-arm
@@ -199,11 +228,14 @@ jobs:
           role-to-assume: ${{ vars.AWS_APPLY_ROLE }}
           role-session-name: gha-deploy-${{ inputs.target_env }}-${{ github.run_id }}
           aws-region: ${{ vars.AWS_REGION }}
+      # Lets Docker push to this account's ECR; the registry address is this step's output.
       - name: ECR login
         id: ecr
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
 
-      # Which images of this SHA are not in ECR yet?
+      # Which images of this SHA are not in ECR yet? The repository name is the kind with "_" turned
+      # into "-" (support_mcp -> shopassist-support-mcp). A rollback to the previous SHA usually finds
+      # every image already there and builds nothing.
       - name: Find missing images
         id: missing
         run: |
@@ -216,6 +248,8 @@ jobs:
             fi
           done
 
+      # Build + check + scan each missing image from the image_tag source (folder src), exactly as in
+      # the pull-request checks. A failing check or scan stops the job before anything is pushed.
       - name: Build agent
         if: steps.missing.outputs.agent == 'true'
         uses: ./.github/actions/build-image
@@ -234,6 +268,7 @@ jobs:
         uses: ./.github/actions/build-image
         with: { kind: role_mapper, dockerfile: identity/role_mapper/Dockerfile, tag: "${{ env.IMAGE_TAG }}", source: src }
 
+      # Give each newly built local image its ECR name (<registry>/<repo>:<sha>) and upload it.
       - name: Push the new images
         env:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
@@ -255,6 +290,9 @@ jobs:
           done
           echo "pushed: ${pushed:-nothing (all images already in ECR)}"
 
+      # A fresh plan, now with the apply role and the real secrets. If its hash differs from the
+      # approved one, something changed in between: stop without applying. This plan takes the state
+      # lock and its saved file (tfplan) is exactly what the next step applies.
       - name: Re-plan and compare with the approved plan
         working-directory: infra/terraform
         run: |
@@ -269,6 +307,8 @@ jobs:
           fi
           echo "plan matches the approved one (${now:0:16})"
 
+      # APPLY_STARTED is recorded first: from here on, pushed images must stay (they may be in use).
+      # Only the "Apply complete" line is shown; on failure, only the error lines (at most 60).
       - name: terraform apply (output kept private)
         working-directory: infra/terraform
         run: |
@@ -280,6 +320,8 @@ jobs:
             exit 1
           fi
 
+      # Calls the freshly deployed stack as bob, carol and alice (see "Smoke test scenarios" above),
+      # using the .deploy/<env>/ files Terraform just wrote. --no-reseed: leave the demo orders as they are.
       - name: Smoke test (access scenarios b, c, d)
         env:
           SHOPASSIST_ENV: ${{ inputs.target_env }}
@@ -294,6 +336,7 @@ jobs:
             echo "deleted $repo:${IMAGE_TAG:0:12}"
           done
 
+      # Always, even after a failure: delete .deploy/ (demo users' passwords), the saved plan and logs.
       - name: Remove local credentials files
         if: always()
         run: rm -rf .deploy infra/terraform/tfplan infra/terraform/*.log
