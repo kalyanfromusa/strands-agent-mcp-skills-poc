@@ -36,9 +36,10 @@
 
 # Step 1: the official Lambda Python 3.12 image for arm64 (AWS Graviton).
 FROM --platform=linux/arm64 public.ecr.aws/lambda/python:3.12-arm64
-# Step 1b: pull in the fixed rpm and sqlite packages that the base image doesn't have yet (Trivy HIGH findings
-# with a fix available). Drop this line once AWS ships a base-image update that already contains them.
-RUN dnf upgrade -y rpm rpm-libs sqlite-libs && dnf clean all
+# Step 1b: install the fixed rpm and sqlite packages (Trivy HIGH findings) that the base image lacks.
+# AL2023 locks an image to its release snapshot, so --releasever=latest is needed to see the fixes.
+# Remove this line once AWS ships a base image that already contains them.
+RUN dnf upgrade -y --releasever=latest rpm rpm-libs sqlite-libs && dnf clean all
 
 # Step 2: the handler and the shared package, flat in the task root (import `common.store` works).
 COPY mcp_servers/orders_lambda/handler.py ${LAMBDA_TASK_ROOT}/
