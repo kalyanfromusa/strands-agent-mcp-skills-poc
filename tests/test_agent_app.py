@@ -211,3 +211,17 @@ def test_agent_code_has_no_domain_words():
                                        "skill_source.py", "tools.py"}
     hits = {p.name: h for p in files if (h := domain_words(p.read_text(encoding="utf-8")))}
     assert hits == {}, f"domain words in generic agent code: {hits}"
+
+
+def test_memory_settings_and_retrieval_namespaces():
+    assert Settings.from_env({}).memory_id == ""
+    assert Settings.from_env({"MEMORY_ID": " mem-123 "}).memory_id == "mem-123"
+    from bedrock_agentcore.memory.integrations.strands.config import RetrievalConfig
+
+    cfg = app.memory_retrieval_config(RetrievalConfig)
+    assert set(cfg) == {"/actors/{actorId}/semantic/", "/actors/{actorId}/summaries/"}
+
+
+def test_memory_session_manager_disabled_without_memory_id_or_actor():
+    assert app.AgentRuntime(Settings())._memory_session_manager("sub-1", "s1") is None
+    assert app.AgentRuntime(Settings(memory_id="m1"))._memory_session_manager("", "s1") is None

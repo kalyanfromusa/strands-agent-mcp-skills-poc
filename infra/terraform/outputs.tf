@@ -39,6 +39,7 @@ output "cognito_token_url" { value = module.identity.token_url }
 output "oauth_provider_name" { value = module.identity.oauth_provider_name }
 output "cognito_users_client_id" { value = module.identity.users_client_id }
 output "policy_engine_id" { value = module.gateway.policy_engine_id }
+output "memory_id" { value = module.memory.memory_id }
 output "deployed_by" { value = "terraform" }
 
 # Full path of .deploy/<env>/outputs.json on the computer that ran Terraform.

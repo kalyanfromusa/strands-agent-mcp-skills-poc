@@ -25,7 +25,9 @@ Step by step (one request, from message to reply)
     3. `AgentRuntime.invoke()` stores the token so every Gateway call carries it (passthrough mode).
     4. It finds the agent for this user, or builds a new one if this is a different user (per-user caching):
        a. load the skills (once), b. connect to the Gateway and fetch the tools this user may see,
-       c. create the Strands agent with the model, the system prompt, the tools and the plugins,
+       c. create the Strands agent with the model, the system prompt, the tools and the plugins (and, when
+          `MEMORY_ID` is set, an AgentCore Memory session manager for this user and session: it restores
+          the session's messages, stores new ones, and adds the user's long-term memories to the prompt),
        d. check the skills against the tools and log any mismatch.
     5. The agent runs. "Progressive disclosure" keeps the prompt small:
        - the model first sees only each skill's name and description (added to the system prompt);
@@ -122,6 +124,18 @@ def caller_key(mode: str, token: str | None) -> str:
     return str(claims.get("sub") or claims.get("client_id") or "unknown")
 
 
+def memory_retrieval_config(retrieval_config_cls: Any) -> dict[str, Any]:
+    """Which long-term memories to search before each answer, as {namespace: RetrievalConfig}.
+
+    `{actorId}` is replaced by the user's id. Both are prefixes, so every session summary of the user is
+    searched. Must match the namespaces of the strategies in infra/terraform/modules/memory.
+    """
+    return {
+        "/actors/{actorId}/semantic/": retrieval_config_cls(top_k=5, relevance_score=0.3),
+        "/actors/{actorId}/summaries/": retrieval_config_cls(top_k=3, relevance_score=0.3),
+    }
+
+
 class AgentRuntime:
     """Builds the Strands agent lazily and keeps one per caller identity.
 
@@ -157,7 +171,29 @@ class AgentRuntime:
             logger.info("loaded %d skills from %s: %s", len(self._skills), skills_dir, [s.name for s in self._skills])
         return self._skills
 
-    def _build(self) -> tuple[Any, SkillBinding]:
+    def _memory_session_manager(self, actor_id: str, session_id: str) -> Any:
+        """AgentCore Memory session manager for this user and session, or None when memory is off.
+
+        It saves every message as a memory event, restores the earlier messages of this session, and adds
+        the user's long-term memories (facts and session summaries) to the prompt. Memory is scoped by
+        `actor_id` (the user's token `sub`), so one user never sees another user's records.
+        """
+        s = self.settings
+        if not s.memory_id or not actor_id:
+            return None
+        from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig, RetrievalConfig
+        from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
+
+        # Namespaces match the strategies in infra/terraform/modules/memory (searched by prefix).
+        config = AgentCoreMemoryConfig(
+            memory_id=s.memory_id,
+            actor_id=actor_id,
+            session_id=session_id,
+            retrieval_config=memory_retrieval_config(RetrievalConfig),
+        )
+        return AgentCoreMemorySessionManager(config, region_name=s.region)
+
+    def _build(self, actor_id: str = "", session_id: str = "") -> tuple[Any, SkillBinding]:
         """Create a new Strands agent for the current caller, connected to the Gateway.
 
         Returns the agent and its `SkillBinding` plugin (which records the skills and tools used).
@@ -187,6 +223,7 @@ class AgentRuntime:
             system_prompt=SYSTEM_PROMPT,
             tools=[gateway, make_read_skill_resource({sk.name: sk.path for sk in skills if sk.path})],
             plugins=[AgentSkills(skills=skills), binding],
+            session_manager=self._memory_session_manager(actor_id, session_id),
             callback_handler=None,
         )
         # Step 5: log which Gateway tools this caller got, and which tools are local.
@@ -199,7 +236,7 @@ class AgentRuntime:
         validate_skills(skills, gateway_tools, local_tools, missing_level=level)
         return agent, binding
 
-    def _agent_for(self, key: str) -> tuple[Any, SkillBinding]:
+    def _agent_for(self, key: str, actor_id: str = "", session_id: str = "") -> tuple[Any, SkillBinding]:
         """Return the agent for caller `key`, building a new one if the caller changed (per-user caching).
 
         Reusing the agent for the same user saves the time of reconnecting to the Gateway, and keeps the
@@ -214,14 +251,16 @@ class AgentRuntime:
                 except Exception:  # noqa: BLE001
                     logger.exception("cleanup of previous agent failed")
                 self._agent = self._binding = self._key = None
-            self._agent, self._binding = self._build()
+            self._agent, self._binding = self._build(actor_id, session_id)
             self._key = key
         assert self._binding is not None
         return self._agent, self._binding
 
     # -- invocation ----------------------------------------------------------------------------
-    def invoke(self, prompt: str, authorization: str | None = None) -> dict[str, Any]:
+    def invoke(self, prompt: str, authorization: str | None = None, session_id: str | None = None) -> dict[str, Any]:
         """Answer one message. `authorization` is the raw `Authorization` header of the request.
+
+        `session_id` is the Runtime session; with memory on, the agent is tied to (user, session).
 
         Returns `{"response": reply text, "skills_used": [...], "tools_used": [...]}`, plus `"error"` on failure.
         """
@@ -244,7 +283,14 @@ class AgentRuntime:
             if mode == "passthrough":
                 bind_request_token(token)
             # Step 4: get this user's agent (reuse it, or build a new one if the user changed).
-            agent, binding = self._agent_for(caller_key(mode, token))
+            key = caller_key(mode, token)
+            # With memory on, the agent also belongs to one session (its history is stored per session),
+            # so a new session gets a new agent. The actor is the user's `sub` (passthrough mode only).
+            actor_id = key if mode == "passthrough" and key != "unknown" else ""
+            sid = session_id or "local-session"
+            if self.settings.memory_id and actor_id:
+                key = f"{key}:{sid}"
+            agent, binding = self._agent_for(key, actor_id, sid)
             # Step 5: run the agent. The model reads the prompt, activates a skill, calls tools, and writes
             # the reply. This can involve several model calls and tool calls.
             result = agent(prompt)
@@ -302,7 +348,7 @@ def invoke(payload: dict[str, Any], context: Any = None) -> dict[str, Any]:
     # Step 2: answer it. Any unexpected failure is logged and returned as an "Error: ..." reply,
     # so the caller always gets an answer in the same shape.
     try:
-        return get_runtime().invoke(prompt, _authorization_from(context))
+        return get_runtime().invoke(prompt, _authorization_from(context), getattr(context, "session_id", None))
     except Exception as e:  # noqa: BLE001
         logger.exception("invocation failed")
         return {"response": f"Error: {e}", "skills_used": [], "tools_used": [], "error": type(e).__name__}

@@ -146,6 +146,27 @@ data "aws_iam_policy_document" "permissions" {
     resources = ["arn:aws:s3:::${var.bucket}/${var.skills_prefix}*"]
   }
 
+  # AgentCore Memory: store conversation events and read long-term records, for this one memory only.
+  # Skipped when no memory is configured.
+  dynamic "statement" {
+    for_each = var.memory_arn != "" ? [1] : []
+    content {
+      sid = "Memory"
+      actions = [
+        "bedrock-agentcore:GetMemory",
+        "bedrock-agentcore:CreateEvent",
+        "bedrock-agentcore:GetEvent",
+        "bedrock-agentcore:ListEvents",
+        "bedrock-agentcore:DeleteEvent",
+        "bedrock-agentcore:ListSessions",
+        "bedrock-agentcore:ListActors",
+        "bedrock-agentcore:RetrieveMemoryRecords",
+        "bedrock-agentcore:ListMemoryRecords",
+      ]
+      resources = [var.memory_arn]
+    }
+  }
+
   # Standard AgentCore Runtime observability permissions.
   statement {
     sid       = "LogGroups"
@@ -274,6 +295,7 @@ resource "aws_bedrockagentcore_agent_runtime" "this" {
     OAUTH_PROVIDER_NAME = var.oauth_provider_name
     OAUTH_SCOPES        = join(" ", var.oauth_scopes)
     SKILLS_S3_URI       = var.skills_s3_uri
+    MEMORY_ID           = var.memory_id
   }
 
   depends_on = [time_sleep.iam]

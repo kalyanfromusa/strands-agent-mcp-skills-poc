@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Ask before destructive commands",
+      "trigger": "PreToolUse",
+      "description": "Prompts for confirmation on terraform destroy/apply, AWS delete calls, rm -rf, git push and hard resets. Everything else runs without asking.",
+      "matcher": "execute_pwsh|control_pwsh_process",
+      "action": {
+        "type": "command",
+        "command": "pwsh -NoProfile -File .kiro/hooks/guard-destructive.ps1"
+      }
+    }
+  ]
+}

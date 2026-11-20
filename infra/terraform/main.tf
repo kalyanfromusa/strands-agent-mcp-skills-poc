@@ -290,6 +290,8 @@ module "agent_runtime" {
   skills_s3_uri            = module.data.skills_s3_uri
   model_id                 = var.model_id
   gateway_url              = module.gateway.gateway_url
+  memory_id                = module.memory.memory_id
+  memory_arn               = module.memory.memory_arn
 
   discovery_url      = module.identity.discovery_url
   allowed_client_ids = [module.identity.users_client_id]
@@ -298,6 +300,15 @@ module "agent_runtime" {
   oauth_provider_name = module.identity.oauth_provider_name
   oauth_scopes        = [local.oauth_scope]
   log_retention_days  = var.log_retention_days
+}
+
+# Step 7b: one shared AgentCore Memory (semantic + summarization strategies, 30-day event expiry).
+# The agent (module "agent_runtime") receives its id as MEMORY_ID and may use only this memory.
+module "memory" {
+  source = "./modules/memory"
+
+  name_prefix       = local.name
+  event_expiry_days = 30
 }
 
 # Step 8 (optional): a monthly AWS Budget that emails you when spending passes 80% of the limit, or
