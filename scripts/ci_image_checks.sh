@@ -6,6 +6,7 @@
 #   scripts/ci_image_checks.sh support_mcp   <image ref>
 #   scripts/ci_image_checks.sh orders_lambda <image ref>
 #   scripts/ci_image_checks.sh role_mapper   <image ref>
+#   scripts/ci_image_checks.sh chat_relay    <image ref>
 #
 # What this file does
 #   Runs one container image locally on the CI runner (no AWS access, in-memory demo data) and calls it
@@ -23,11 +24,11 @@
 #   run on the native arm64 runner right after building the image into the runner's local Docker.
 #   deploy.yml only pushes images that passed. Images are never built on a developer machine
 #   (decision 2026-11-07), so this is the "does it start?" safety net.
-#   (The usage messages on the `kind=` / `image=` lines below list only three kinds; role_mapper works too.)
+#   (The usage messages on the `kind=` / `image=` lines below list only three kinds; role_mapper and chat_relay work too.)
 #
 # Step by step
 #   1. Start the container in the background. support_mcp and orders_lambda get demo data
-#      (STORE=memory, data/seed.json mounted read-only); agent and role_mapper need none.
+#      (STORE=memory, data/seed.json mounted read-only); agent, role_mapper and chat_relay need none.
 #   2. Wait until it answers (up to 60 seconds).
 #   3. Make the image-specific call and check the answer.
 #   4. Always stop and remove the container, even when a check fails.
@@ -132,9 +133,25 @@ case "${kind}" in
     grep -q '"groupsToOverride": *\["Group-ShopAssist-Admin"\]' <<<"${out}" || fail "role mapping returned: ${out}"
     echo "OK role_mapper: AppRole-ShopAssist-Admin -> Group-ShopAssist-Admin"
     ;;
+  chat_relay)
+    # Step 1: start the function inside the emulator (port 8080 -> 19002). RUNTIME_URL points at a port
+    # nothing listens on: the check below is refused before the function would ever call it.
+    docker run -d --name "${name}" -p 19002:8080 \
+      -e RUNTIME_URL=http://127.0.0.1:9/x -e ALLOWED_ORIGIN=https://example.test "${image}" >/dev/null
+    url=http://127.0.0.1:19002/2015-03-31/functions/function/invocations
+    # Step 2: wait until the emulator answers.
+    wait_for curl -fsS -d '{}' "${url}" || fail "the Lambda emulator did not start"
+    # Step 3: a made-up function-URL event with a token that is not a JWT. The function must refuse it
+    # with HTTP 400 and an "error" body, without any network call.
+    ev='{"headers":{"content-type":"application/json","authorization":"Bearer nope","x-amzn-bedrock-agentcore-runtime-session-id":"0123456789012345678901234567890123"},"body":"{\"prompt\":\"hi\"}","isBase64Encoded":false,"requestContext":{"http":{"method":"POST"}}}'
+    out="$(curl -fsS -d "${ev}" "${url}")"
+    grep -q '"statusCode": *400' <<<"${out}" || fail "chat_relay did not answer 400: ${out}"
+    grep -q 'error' <<<"${out}" || fail "chat_relay reply has no error: ${out}"
+    echo "OK chat_relay: a bad token is refused with HTTP 400"
+    ;;
 
   # Anything else is a typo in the calling workflow.
   *)
-    fail "unknown image kind (agent | support_mcp | orders_lambda | role_mapper)"
+    fail "unknown image kind (agent | support_mcp | orders_lambda | role_mapper | chat_relay)"
     ;;
 esac

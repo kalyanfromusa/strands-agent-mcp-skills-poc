@@ -13,7 +13,7 @@
 #   token says <subject prefix>:environment:<env>, and only that matches the trust policy (iam_ci.tf
 #   step 2). The apply role can mostly only touch resources named shopassist-<env>-* /
 #   shopassist_<env>_* (or, for Cognito pools, whose ARNs hold a generated id: tagged
-#   project=shopassist + environment=<env>). Exceptions: the four ECR repositories are shared by all
+#   project=shopassist + environment=<env>). Exceptions: the five ECR repositories are shared by all
 #   environments, and AgentCore is allowed account-wide (see "Known to be broad" below). This account
 #   also hosts other projects, so this scoping is what keeps a ShopAssist deploy away from them.
 #

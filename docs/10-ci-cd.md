@@ -49,7 +49,7 @@ Rules behind it (decisions of 2026-11-06/07, see `.kiro/steering/decisions.md`):
    file; only the summary from `scripts/tf_plan_summary.py` (resource addresses and actions, no values) is
    shown. That summary is what you approve.
 3. **deploy** (GitHub environment `prod` → **waits for your approval**, then the apply role):
-   1. ECR login; find which of the 4 images for `<sha>` aren't in ECR yet.
+   1. ECR login; find which of the 5 images for `<sha>` aren't in ECR yet.
    2. Build, check and scan each missing image (same composite action as CI), then push it.
    3. Re-plan, compute the plan hash (`tf_plan_summary.py --hash`) and **stop if it differs** from the
       approved plan (something changed between approval and apply).

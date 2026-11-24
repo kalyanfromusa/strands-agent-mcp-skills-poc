@@ -1,11 +1,11 @@
 # Tech
 - Python 3.12, `uv`. Strands Agents (built-in `AgentSkills` plugin, `MCPClient`), `bedrock-agentcore` SDK, FastMCP (`mcp` package), FastAPI (on-prem API simulation).
 - Model: Bedrock `us.anthropic.claude-haiku-4-5-20251001-v1:0` (Claude Haiku 4.5, configurable via `model_id`).
-- AWS: AgentCore Runtime (container images, arm64), AgentCore Gateway (MCP, CUSTOM_JWT/Cognito, targets Lambda + MCP server + OpenAPI), AgentCore Identity (OAuth2 credential providers), AgentCore Policy (Cedar), Lambda (container images), ECR, DynamoDB on-demand, S3, Cognito (with an Entra ID OIDC federation), CloudWatch.
+- AWS: AgentCore Runtime (container images, arm64), AgentCore Gateway (MCP, CUSTOM_JWT/Cognito, targets Lambda + MCP server + OpenAPI), AgentCore Identity (OAuth2 credential providers), AgentCore Policy (Cedar), Lambda (container images), ECR, DynamoDB on-demand, S3, CloudFront (hosted chat page), Cognito (with an Entra ID OIDC federation), CloudWatch.
 - Identity: Microsoft Entra ID (app roles assigned to groups) federated into Cognito. A pre-token-generation Lambda maps the roles to Cognito groups.
 - IaC: **Terraform only** (`hashicorp/aws` >= 6.71). Three roots: `bootstrap` (state bucket), `platform` (ECR, OIDC, CI roles) and main (per env). S3 backend with `use_lockfile`. Writes `.deploy/<env>/outputs.json`.
 - CI/CD: GitHub Actions (public repo) with GitHub OIDC → IAM roles. PR plan (summary only), build on merge, **manual** deploy with approval on the `prod` environment.
 - Containers: `docker buildx --platform linux/arm64`, dependencies pinned from `uv.lock`, Trivy scan.
 - Tunnel: Cloudflare Tunnel (`onprem-prod.nalamone.com`) for the on-prem API (planned, P8; supersedes ngrok).
 - Environments: `dev` and `prod` defined, `prod` deployed (account 438750401181, AWS profile `personal` per command; never for the Claude session).
-- Tests: `uv run pytest` (moto for DynamoDB). No Postgres. No web UI beyond the local chat page (`scripts/chat_ui.py`).
+- Tests: `uv run pytest` (moto for DynamoDB). No Postgres. The only web UI is the chat page (`scripts/chat_ui.html`): local via `scripts/chat_ui.py`, hosted on S3 + CloudFront with a Lambda function URL relay (`chat_relay/`).

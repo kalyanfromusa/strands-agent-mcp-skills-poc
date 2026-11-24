@@ -1,9 +1,9 @@
 # =====================================================================================================
-# platform/ecr.tf: the four container image repositories, shared by every environment
+# platform/ecr.tf: the five container image repositories, shared by every environment
 #
 # What this file does
 #   Creates one private ECR repository per workload image (agent, support MCP server, orders Lambda,
-#   role-mapper Lambda), with immutable tags, a vulnerability scan on every push, and a cleanup rule.
+#   role-mapper Lambda, chat-relay Lambda), with immutable tags, a vulnerability scan on every push, and a cleanup rule.
 #
 # Where it fits
 #   GitHub Actions' deploy.yml pushes images tagged with the full git commit SHA. The
@@ -30,7 +30,7 @@
 #   AES256: encryption at rest with AWS-managed keys (free).
 # =====================================================================================================
 
-# The four repositories. The logical names on the left are the keys the main stack uses
+# The five repositories. The logical names on the left are the keys the main stack uses
 # (local.images["agent"] etc.).
 locals {
   # Logical name => repository name (design.md section 1 and 5).
@@ -39,6 +39,7 @@ locals {
     support_mcp   = "${var.name_prefix}-support-mcp"
     orders_lambda = "${var.name_prefix}-orders-lambda"
     role_mapper   = "${var.name_prefix}-role-mapper"
+    chat_relay    = "${var.name_prefix}-chat-relay"
   }
 }
 

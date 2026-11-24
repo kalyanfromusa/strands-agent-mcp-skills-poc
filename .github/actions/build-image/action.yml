@@ -11,8 +11,8 @@
 # Where it fits
 #   ci.yml and build.yml (via _checks.yml) run it for every pull request and merge. deploy.yml runs it
 #   in the approved apply job for any image that isn't in ECR yet, then pushes the result. Only images
-#   that passed all four steps can ever be pushed. The images: agent, support_mcp, orders_lambda and
-#   role_mapper (the `kind` input below; its description lists only the first three, but all four work).
+#   that passed all four steps can ever be pushed. The images: agent, support_mcp, orders_lambda,
+#   role_mapper and chat_relay (the `kind` input below).
 #
 # Key terms
 #   Composite action: steps packaged for reuse, like a function.
@@ -31,7 +31,7 @@ description: Build linux/arm64, run the container checks, Trivy scan. Loads loca
 
 inputs:
   kind:
-    description: agent | support_mcp | orders_lambda
+    description: agent | support_mcp | orders_lambda | role_mapper | chat_relay
     required: true
   dockerfile:
     description: Dockerfile path relative to the source folder

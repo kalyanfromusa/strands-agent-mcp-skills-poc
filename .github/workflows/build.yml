@@ -12,7 +12,7 @@
 #   The build also warms the GitHub Actions layer cache, so the deploy's own build is fast.
 #
 # Step by step
-#   1. checks: run _checks.yml (tests, Terraform checks, the four images built, started and scanned).
+#   1. checks: run _checks.yml (tests, Terraform checks, the five images built, started and scanned).
 #   2. ready:  only if every check passed, write a "Ready to deploy" note with the commit SHA on the
 #              run's summary page.
 #

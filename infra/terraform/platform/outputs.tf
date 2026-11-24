@@ -20,7 +20,7 @@
 
 # Used by the main stack: it appends :<image_tag> to these to get each workload's image.
 output "ecr_repository_urls" {
-  description = "ECR repository URL per image (agent, support_mcp, orders_lambda, role_mapper)."
+  description = "ECR repository URL per image (agent, support_mcp, orders_lambda, role_mapper, chat_relay)."
   value       = { for k, r in aws_ecr_repository.this : k => r.repository_url }
 }
 
