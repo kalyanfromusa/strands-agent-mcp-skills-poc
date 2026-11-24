@@ -2,8 +2,9 @@
 # main.tf (Terraform root module): the "table of contents" of the ShopAssist deployment
 #
 # What this file does
-#   Wires the building blocks (modules) of ShopAssist together: six always, plus a seventh
-#   (role_mapper) only when Entra ID sign-in is switched on. It also re-syncs the Gateway's support
+#   Wires the building blocks (modules) of ShopAssist together: nine always, plus a tenth
+#   (role_mapper) only when Entra ID sign-in is switched on. Two of them (chat_site, chat_relay) publish
+#   the hosted chat page. It also re-syncs the Gateway's support
 #   target after an image change, adds an optional cost alert, and writes two small files into
 #   .deploy/<env>/ that the command-line scripts read to talk to the deployment.
 #
@@ -39,6 +40,10 @@
 #     |                                                                        v
 #     +-- login settings, users client id --------------------------------> agent_runtime
 #   data -- skills location ------------------------------------------------> (Strands agent)
+#     |
+#   chat_site (S3 + CloudFront page) -- domain --> identity (web client callback) + chat_relay (CORS)
+#   agent_runtime -- runtime URL --> chat_relay (Lambda function URL) -- relay URL, web client id -->
+#   chat_site (config.json)
 #
 #   Every workload module also gets its container image (<ECR repository>:<image_tag>) and the
 #   permissions boundary from the platform stack.
@@ -59,6 +64,9 @@
 #   6. module.gateway: create the policy engine, the Gateway, its two targets and the Cedar policies.
 #      6b. Ask the Gateway to re-read the support server's tool list (scripts/sync_gateway_target.py).
 #   7. module.agent_runtime: start the Strands agent on AgentCore Runtime, pointed at the Gateway.
+#   7c. module.chat_site: private S3 bucket + CloudFront for the hosted chat page; uploads index.html,
+#      chat_auth.js and config.json. module.chat_relay: the Lambda + function URL the page posts to.
+#      The Cognito web client (module.identity) is added to the Runtime and Gateway allow-lists.
 #   8. Optionally create a monthly AWS Budget alert.
 #   9. Write .deploy/<env>/outputs.json and .deploy/<env>/users.json for the CLI scripts.
 #
@@ -103,7 +111,7 @@ data "terraform_remote_state" "platform" {
 #   repo_root:   the repository folder, two levels up from infra/terraform (scripts run from there).
 #   platform:    shorthand for the platform stack's outputs (step 1b).
 #   images:      the container image of each workload, <ECR repository URL>:<image_tag>, keyed
-#                agent / support_mcp / orders_lambda / role_mapper.
+#                agent / support_mcp / orders_lambda / role_mapper / chat_relay.
 #   ecr_arns:    the ECR repository ARNs, rebuilt from the repository URLs (the part after the "/" is
 #                the repository name). The two runtime roles use them so each may pull only its own
 #                image. Lambda pulls its image through a permission on the ECR repository itself
@@ -126,6 +134,10 @@ locals {
   boundary = local.platform.boundary_arns[var.environment]
 
   oauth_scope = "${var.name_prefix}/invoke"
+
+  # The agent Runtime's invocation address (same form as scripts/invoke_agent.py runtime_url);
+  # the ARN is URL-encoded because it contains ":" and "/".
+  runtime_invoke_url = "https://bedrock-agentcore.${var.region}.amazonaws.com/runtimes/${urlencode(module.agent_runtime.runtime_arn)}/invocations?qualifier=DEFAULT"
 }
 
 # Step 2: storage. Creates the artifacts S3 bucket (skills files) and the three DynamoDB tables
@@ -180,6 +192,9 @@ module "identity" {
   trigger_version     = var.entra_trigger_version
   region              = var.region
   account_id          = local.account_id
+
+  # The hosted chat page's address is the web client's only callback and logout URL (trailing slash).
+  web_callback_urls = [module.chat_site.url]
 }
 
 # Step 4: the `orders` tools (get_order, list_customer_orders, check_return_eligibility,
@@ -235,7 +250,8 @@ module "gateway" {
 
   discovery_url = module.identity.discovery_url
   # users client: tokens forwarded by the agent; m2m client: local dev and smoke tests.
-  allowed_client_ids = [module.identity.users_client_id, module.identity.client_id]
+  # web client: tokens of the hosted chat page (passed through by the agent like users-client tokens).
+  allowed_client_ids = [module.identity.users_client_id, module.identity.web_client_id, module.identity.client_id]
 
   lambda_arn        = module.lambda_tools.function_arn
   tools_schema_path = "${local.repo_root}/mcp_servers/orders_lambda/tools_schema.json"
@@ -294,7 +310,7 @@ module "agent_runtime" {
   memory_arn               = module.memory.memory_arn
 
   discovery_url      = module.identity.discovery_url
-  allowed_client_ids = [module.identity.users_client_id]
+  allowed_client_ids = [module.identity.users_client_id, module.identity.web_client_id]
   allowed_groups     = ["Group-ShopAssist-Admin", "Group-ShopAssist-Viewer"]
 
   oauth_provider_name = module.identity.oauth_provider_name
@@ -309,6 +325,43 @@ module "memory" {
 
   name_prefix       = local.name
   event_expiry_days = 30
+}
+
+# Step 7c: the hosted chat page. module chat_site is a private S3 bucket behind CloudFront that holds
+# index.html (scripts/chat_ui.html), chat_auth.js and config.json. module chat_relay is the Lambda
+# function URL the page posts to (the Runtime does not answer browser CORS preflights, so the page
+# cannot call it directly). Terraform cannot see a loop here: the distribution (chat_site) depends on
+# nothing; identity and chat_relay take its domain name; the config.json object takes their outputs.
+# config.json is public and holds ids and addresses only (design.md section 12).
+module "chat_site" {
+  source = "./modules/chat_site"
+
+  name_prefix        = local.name
+  account_id         = local.account_id
+  region             = var.region
+  page_dir           = "${local.repo_root}/scripts"
+  cognito_domain_url = module.identity.domain_url
+
+  config = {
+    environment        = var.environment
+    region             = var.region
+    cognito_domain_url = module.identity.domain_url
+    client_id          = module.identity.web_client_id
+    relay_url          = module.chat_relay.function_url
+    entra_enabled      = tostring(var.enable_entra)
+  }
+}
+
+module "chat_relay" {
+  source = "./modules/chat_relay"
+
+  name_prefix              = local.name
+  image_uri                = local.images["chat_relay"]
+  permissions_boundary_arn = local.boundary
+  runtime_url              = local.runtime_invoke_url
+  allowed_origin           = "https://${module.chat_site.domain_name}"
+  reserved_concurrency     = var.chat_relay_reserved_concurrency
+  log_retention_days       = var.log_retention_days
 }
 
 # Step 8 (optional): a monthly AWS Budget that emails you when spending passes 80% of the limit, or
@@ -371,6 +424,11 @@ locals {
     cognito_domain_url      = module.identity.domain_url
     entra_enabled           = var.enable_entra
     policy_engine_id        = module.gateway.policy_engine_id
+    cognito_web_client_id   = module.identity.web_client_id
+    chat_ui_url             = module.chat_site.url
+    chat_ui_bucket          = module.chat_site.bucket
+    chat_ui_distribution_id = module.chat_site.distribution_id
+    chat_relay_url          = module.chat_relay.function_url
     deployed_by             = "terraform"
   }
 }

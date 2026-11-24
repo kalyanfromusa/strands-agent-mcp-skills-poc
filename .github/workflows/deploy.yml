@@ -14,7 +14,9 @@
 #     3. deploy   waits in the GitHub environment <target_env> (prod: you must approve). Then, with the
 #                 apply role: builds + checks + scans + pushes any image of that SHA not yet in ECR,
 #                 re-plans and refuses to continue if the plan differs from the one you approved,
-#                 applies it, and runs the access smoke test (scenarios b, c, d) against the result.
+#                 applies it (this also uploads the chat page files to S3 and creates the CloudFront
+#                 distribution and the chat relay Lambda), clears the CloudFront cache so a changed page
+#                 shows at once, and runs the access smoke test (scenarios b, c, d) against the result.
 #                 If it fails before Terraform started changing anything, it deletes the images it
 #                 pushed, so ECR still holds exactly "current + previous".
 #
@@ -324,6 +326,21 @@ jobs:
             grep -E "^(Error|│)" apply.log | head -60
             exit 1
           fi
+
+      # The page files are uploaded by `terraform apply` with Cache-Control: no-cache; this one call makes a
+      # changed page visible at once. Reads the distribution id from the file Terraform just wrote (no
+      # secret in it) and prints a single line. One path ("/*") costs nothing within the free tier.
+      - name: Invalidate the chat UI cache
+        env:
+          SHOPASSIST_ENV: ${{ inputs.target_env }}
+        run: |
+          id="$(jq -r .chat_ui_distribution_id ".deploy/${SHOPASSIST_ENV}/outputs.json")"
+          if [ -z "$id" ] || [ "$id" = "null" ]; then
+            echo "::error::chat_ui_distribution_id is missing from .deploy/${SHOPASSIST_ENV}/outputs.json"
+            exit 1
+          fi
+          aws cloudfront create-invalidation --distribution-id "$id" --paths "/*" >/dev/null
+          echo "chat UI cache invalidated (distribution ${id})"
 
       # Calls the freshly deployed stack as bob, carol and alice (see "Smoke test scenarios" above),
       # using the .deploy/<env>/ files Terraform just wrote. --no-reseed: leave the demo orders as they are.

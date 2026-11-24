@@ -12,7 +12,7 @@
 #
 # Step by step
 #   1. Report the user pool id, discovery URL and token URL.
-#   2. Report the two app client ids (M2M client and users client).
+#   2. Report the three app client ids (M2M, users and web client).
 #   3. Report the credential provider's name, ARN and the ARN of the secret it stores.
 #   4. Report the demo users' usernames, passwords and groups, once their groups are set up.
 #   5. Report the sign-in domain address used by the browser sign-in.
@@ -39,6 +39,8 @@ output "discovery_url" {
 output "token_url" { value = local.token_url }
 output "client_id" { value = aws_cognito_user_pool_client.m2m.id }
 output "users_client_id" { value = aws_cognito_user_pool_client.users.id }
+# web_client_id: the client the hosted chat page (CloudFront) signs in through.
+output "web_client_id" { value = aws_cognito_user_pool_client.web.id }
 output "oauth_provider_name" { value = aws_bedrockagentcore_oauth2_credential_provider.cognito.name }
 output "oauth_provider_arn" { value = aws_bedrockagentcore_oauth2_credential_provider.cognito.credential_provider_arn }
 

@@ -93,6 +93,32 @@ Notes:
 - The response is `{"response": str, "skills_used": [...], "tools_used": [...]}`. The CLI prints the
   reply and then a dim `skills: ... | tools: ...` line.
 
+### Hosted chat page flow
+
+The page on CloudFront signs the user in itself and reaches the Runtime through the relay Lambda:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Browser (chat page)
+    participant CF as CloudFront + S3
+    participant CG as Cognito (web client)
+    participant RL as chat relay (Lambda URL)
+    participant R as Agent Runtime
+    U->>CF: GET / (index.html, chat_auth.js, config.json)
+    U->>CG: /oauth2/authorize (code + PKCE challenge, state, nonce)
+    CG-->>U: redirect to the page with ?code&state
+    U->>CG: /oauth2/token (code + verifier)
+    CG-->>U: access token (cognito:groups), kept in memory
+    U->>RL: POST {"prompt"} + Authorization: Bearer + Session-Id (CORS: page origin only)
+    RL->>R: same headers and body, token unchanged
+    R-->>RL: 200 JSON (JWT authorizer checks client + group)
+    RL-->>U: {"status", "elapsed_ms", "result"}
+```
+
+From the Runtime on, the flow is the one above. The Cognito web client id is in the Runtime's and the
+Gateway's allowed client lists. The relay has no AWS rights beyond writing its logs.
+
 ## Generic agent design
 
 `agent/` contains no domain words. Everything specific comes from skill files and the Gateway's tool
@@ -388,6 +414,7 @@ GitHub Actions and rolled out by Terraform (`-var image_tag=<sha>`):
 | `shopassist-support-mcp` | `mcp_servers/support_mcp/Dockerfile` | AgentCore Runtime, arm64 | `python server.py` (stateless streamable HTTP on `0.0.0.0:8000/mcp`) |
 | `shopassist-orders-lambda` | `mcp_servers/orders_lambda/Dockerfile` | Lambda, arm64 | `handler.lambda_handler` |
 | `shopassist-role-mapper` | `identity/role_mapper/Dockerfile` | Lambda, arm64 (only with Entra) | `handler.lambda_handler` |
+| `shopassist-chat-relay` | `chat_relay/Dockerfile` | Lambda, arm64 (the hosted chat page's backend) | `handler.lambda_handler` |
 
 - Dependencies are pinned with hashes (`requirements.lock.txt`, generated from `uv.lock`), so two builds of one
   commit are identical.

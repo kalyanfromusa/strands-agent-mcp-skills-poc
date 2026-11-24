@@ -51,6 +51,9 @@ no plan file is uploaded: the apply job re-plans and refuses to apply if the pla
   `Group-<App>-<Role>`, translated by a **pre-token-generation Lambda** with an allow-list map (fail closed).
 - Backend checks the JWT (`cognito:groups`) at the entry point; fine-grained rules live in policy (Cedar here).
 - Machine-to-machine calls use Cognito **client-credentials** tokens.
+- A browser UI can be hosted as S3 + CloudFront with its own public Cognito client (code + PKCE). A browser can't call
+  the AgentCore Runtime directly (no CORS), so a small relay Lambda (function URL) forwards the user's token; reserved
+  concurrency caps its cost. See `docs/11-chat-ui.md`.
 
 ## 5. Reusing it for an app with mobile clients
 

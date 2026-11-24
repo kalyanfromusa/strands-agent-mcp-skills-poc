@@ -20,7 +20,12 @@
 #
 # What is removed: runtimes, Gateway + targets + Cedar policies + policy engine, Lambda, DynamoDB tables
 #   (all orders, returns and tickets), the S3 bucket with the skills, the Cognito pool with every user,
-#   the OAuth credential providers and their secrets, IAM roles, log groups, the budget (if enabled), images.
+#   the OAuth credential providers and their secrets, IAM roles, log groups, the budget (if enabled), images,
+#   and the hosted chat page: the CloudFront distribution (with its origin access control and headers
+#   policy), the page bucket and its files, the chat relay Lambda, and the Cognito web client. They all
+#   live in the same Terraform state, so no extra step is needed. Deleting a CloudFront distribution takes
+#   several minutes; the destroy job's 60-minute limit leaves plenty of room. The final scan also checks
+#   CloudFront.
 # What stays (free while empty, and needed to deploy again): the state bucket, the empty ECR
 #   repositories, the GitHub OIDC provider, the CI roles and the permissions boundaries. To remove those
 #   too, run scripts/destroy_everything.sh on your machine (it can't run here: it deletes the very roles

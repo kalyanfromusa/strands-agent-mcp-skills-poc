@@ -15,6 +15,45 @@ from the browser. The relay listens on `127.0.0.1` only, refuses other Host/Orig
 forwards to one target fixed at start-up, so a web page can't redirect your token elsewhere. It
 never logs or stores tokens. They stay in the browser tab's memory.
 
+## Hosted chat UI (CloudFront)
+
+Each deployed environment also publishes the same page on the internet, so you need no local server,
+no `.deploy/` files and no pasted token. Open the address and sign in.
+
+```powershell
+# the address is chat_ui_url in .deploy/prod/outputs.json (a pipeline deploy deletes that file at the end of the job;
+# recreate it as described in docs/04 §4), or in the deploy job's Terraform outputs:
+Get-Content .deploy/prod/outputs.json | ConvertFrom-Json | Select-Object -ExpandProperty chat_ui_url
+```
+
+It looks like `https://d1234abcdef.cloudfront.net/`. The page offers **Sign in** with the Cognito page (alice,
+bob, carol, passwords in `.deploy/<env>/users.json`) and, when Entra is enabled, **Sign in with Entra ID**.
+The access token lasts 15 minutes; after that the page says so and you sign in again. **Sign out** ends the
+Cognito session and returns to the page.
+
+How it works:
+
+| Piece | What it is |
+|---|---|
+| Page | `scripts/chat_ui.html` (published as `index.html`) and `scripts/chat_auth.js`, in a private S3 bucket behind CloudFront. Terraform uploads them, together with a `config.json` that holds the Cognito web client id and the relay address (no secrets). The deploy job then invalidates the CloudFront cache |
+| Sign-in | Authorization code + PKCE straight from the browser against the Cognito web client `shopassist-<env>-web` (a public client, callback URL = the page address) |
+| Relay | A Lambda function URL (`chat_relay_url`). The page posts `{"prompt"}` to it with your token and session id; it forwards them to the agent Runtime and returns the answer. The Runtime doesn't answer CORS preflights, so a browser can't call it directly |
+| Access rights | Unchanged: the Runtime JWT authorizer (group check) and Cedar at the Gateway decide, with your own token. The relay is public but holds no rights of its own |
+
+Sign-in flow (PKCE), in short:
+
+1. The page makes a random `verifier` and sends `SHA-256(verifier)` (the *challenge*), a `state` and a `nonce` to
+   the Cognito login page. The verifier, state and nonce are kept in `sessionStorage` only.
+2. You sign in. Cognito redirects back to the page with a one-time `code` and your `state`.
+3. The page checks the `state`, removes the code from the address bar, and sends `code` + `verifier` to Cognito's
+   token endpoint. Cognito hashes the verifier and compares it with the challenge from step 1, so a stolen
+   code is useless without the verifier.
+4. Cognito returns tokens. The page checks the `nonce` and keeps the access token in memory only
+   (never `localStorage` or cookies); the verifier, state and nonce are deleted.
+
+Limits: the relay's reserved concurrency (`chat_relay_reserved_concurrency`, default 5) caps parallel
+requests and so the spend; extra requests get HTTP 429. There is no custom domain, WAF or API Gateway.
+
 ## Local testing (no AWS deployment)
 
 This is the same setup as `run_local.py` in the [README quick start](../README.md#quick-start), but

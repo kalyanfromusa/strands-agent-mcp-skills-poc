@@ -25,7 +25,9 @@ roughly what its Bedrock tokens cost.
 | Lambda (`shopassist-orders-tools`, arm64, 256 MB) | Requests + GB-seconds | ~2–5 invocations per conversation | None |
 | DynamoDB on-demand (3 tables) | Read/write request units + storage | A few reads/writes per conversation, kilobytes of data | Storage (KB) |
 | S3 (artifacts bucket: skills only; the Terraform state bucket) | Storage + requests | A few KB of skills and state files | Negligible |
-| ECR (4 repositories, 2 images each) | Storage per GB-month | About 8 images of a few hundred MB | Image storage (cents per month) |
+| ECR (5 repositories, 2 images each) | Storage per GB-month | About 10 images of a few hundred MB | Image storage (cents per month) |
+| CloudFront + S3 (hosted chat page) | Requests and data transfer out (3 small files), S3 storage | A page load is about 100 KB; price class 100; the free tier covers a demo | None |
+| Lambda (`shopassist-chat-relay`, arm64, 256 MB) | Requests + GB-seconds | One invocation per chat message, running for the whole agent answer (up to 300 s) | None |
 | GitHub Actions | Free for public repositories (standard and arm64 runners) | Every PR, merge and deploy | None |
 | CloudWatch Logs (7-day retention) | Ingestion + storage | Runtime and Lambda logs | Storage, 7 days max |
 | AWS Budgets (optional: `enable_budget` in `envs/<env>.tfvars`) | Budgets themselves are generally free; check the pricing page | 1 budget | n/a |
@@ -96,4 +98,5 @@ specs, shorter tool descriptions in `tools_schema.json`, and fewer tools per ski
 | Budget alert (Terraform) | Set `enable_budget = true`, `budget_email`, `budget_limit_usd` (default 5) in `envs/<env>.tfvars`. It alerts at 80% actual and 100% forecasted. The budget is account-wide, because tag-filtered budgets need cost-allocation tags activated in Billing first |
 | Tag everything | `project=shopassist` on every taggable resource (and `environment=<env>`, through Terraform `default_tags`), so leftovers are easy to find |
 | Create and destroy on demand | `destroy.yml` removes a whole environment and scans for leftovers; `deploy.yml` recreates it. `scripts/destroy_everything.sh` also removes the (free) foundation ([04 §7](04-deploy-terraform.md#7-destroy)) |
+| Chat relay concurrency cap | `chat_relay_reserved_concurrency` (default 5) is the hard limit on parallel relay runs, so a flood of requests to its public address can't run up Lambda time (or Bedrock tokens: a request needs a valid Cognito token). `null` removes the cap. No extra budget: the optional `enable_budget` above covers CloudFront and the relay too |
 | ECR keeps 2 images | Lifecycle rule per repository (current + previous); only deploys push |
