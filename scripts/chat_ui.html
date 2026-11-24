@@ -105,20 +105,23 @@
       <div class="row">
         <button type="button" id="loginEntra" class="primary" hidden>Sign in with Entra ID</button>
         <button type="button" id="loginCognito">Sign in (Cognito page)</button>
+        <button type="button" id="signOut" hidden>Sign out</button>
       </div>
-      <p class="note">Opens the sign-in page; after signing in you come back here with your token. Or paste a token below.</p>
+      <p class="note" id="loginNote">Opens the sign-in page; after signing in you come back here with your token. Or paste a token below.</p>
     </div>
+    <div id="pasteBox">
     <label for="token">Cognito <em>access</em> token</label>
     <textarea id="token" rows="5" spellcheck="false" autocomplete="off" placeholder="eyJraWQiOi… (Bearer prefix optional)"></textarea>
     <div class="row">
       <button type="button" id="apply" class="primary">Use token</button>
       <button type="button" id="clearTok">Clear</button>
     </div>
+    </div>
     <div id="tokStatus" role="status" aria-live="polite"></div>
     <div id="claims"></div>
     <p class="note">Claims are decoded in the browser for display only. The signature is checked by the AgentCore Runtime, not by this page. The token stays in this tab's memory and isn't saved anywhere.</p>
 
-    <details>
+    <details id="tokHelp">
       <summary>How to get a token</summary>
       <p class="note">Quickest: the helper signs in a demo user from <code>.deploy/&lt;env&gt;/users.json</code>.</p>
       <pre class="cmd">.venv\Scripts\python.exe scripts\chat_ui.py --print-token alice</pre>
@@ -171,6 +174,7 @@
   </main>
 </div>
 
+<script src="chat_auth.js"></script>
 <script>
 "use strict";
 
@@ -263,7 +267,8 @@ const SAMPLES = {
 
 /* ---------------------------------------------------------------- state */
 const $ = (id) => document.getElementById(id);
-const state = { token: null, claims: null, sessionId: null, busy: false, config: null };
+const state = { token: null, claims: null, sessionId: null, busy: false, config: null, hosted: false };
+const SESSION_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id";
 
 /* ---------------------------------------------------------------- helpers */
 function newSessionId() {
@@ -411,16 +416,24 @@ async function send(prompt) {
   $("log").append(typing); scrollDown();
   let ok = false;
   try {
-    const resp = await fetch("/api/invoke", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: state.token, session_id: state.sessionId, prompt }),
-    });
-    const data = await resp.json().catch(() => ({ error: "non-JSON reply from the local relay" }));
+    // Hosted: straight to the relay Lambda with the token in a header. Local: the page's own relay (/api/invoke).
+    const resp = state.hosted
+      ? await fetch(state.config.relay_url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + state.token, [SESSION_HEADER]: state.sessionId },
+          body: JSON.stringify({ prompt }),
+        })
+      : await fetch("/api/invoke", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: state.token, session_id: state.sessionId, prompt }),
+        });
+    const data = await resp.json().catch(() => ({ error: "non-JSON reply from the relay" }));
     if (!resp.ok) {
       addError(`Relay error (HTTP ${resp.status}): ${data.error || ""}`);
     } else if (data.status === 401 || data.status === 403) {
-      addError(`Access denied (HTTP ${data.status}): the Runtime's JWT authorizer rejected this token, so no agent code ran.\n${(data.error || "").slice(0, 300)}`);
+      addError(`Access denied (HTTP ${data.status}): the Runtime's JWT authorizer rejected this token, so no agent code ran.`
+        + (state.hosted ? " Sign in again (tokens last 15 minutes)." : "") + `\n${(data.error || "").slice(0, 300)}`);
     } else if (data.status >= 400) {
       addError(`Agent error (HTTP ${data.status}): ${(data.error || "").slice(0, 800)}`);
     } else {
@@ -428,7 +441,8 @@ async function send(prompt) {
       ok = true;
     }
   } catch (e) {
-    addError("Couldn't reach the local relay. Is scripts/chat_ui.py still running? " + e.message);
+    addError(state.hosted ? "Couldn't reach the relay: " + e.message
+                          : "Couldn't reach the local relay. Is scripts/chat_ui.py still running? " + e.message);
   } finally {
     typing.remove();
     state.busy = false; updateChrome();
@@ -489,12 +503,52 @@ function useDummyToken(user, group) {
   applyToken();
 }
 
+/* ---------------------------------------------------------------- hosted mode (sign-in with code + PKCE) */
+const SS = { verifier: "chat.pkce.verifier", state: "chat.pkce.state", nonce: "chat.pkce.nonce" };
+
+function redirectUri() { return location.origin + "/"; }
+
+async function startLogin(idp) {
+  const cfg = state.config;
+  const { verifier, challenge } = await ChatAuth.pkcePair();
+  const st = ChatAuth.randomString(24), nonce = ChatAuth.randomString(24);
+  sessionStorage.setItem(SS.verifier, verifier);
+  sessionStorage.setItem(SS.state, st);
+  sessionStorage.setItem(SS.nonce, nonce);
+  location.href = ChatAuth.authorizeUrl(cfg, redirectUri(), st, nonce, challenge, idp);
+}
+
+/** Back from Cognito with ?code=&state=: verify, exchange, hand the access token to applyToken(). */
+async function finishHostedLogin() {
+  const search = location.search;
+  const verifier = sessionStorage.getItem(SS.verifier), st = sessionStorage.getItem(SS.state), nonce = sessionStorage.getItem(SS.nonce);
+  Object.values(SS).forEach((k) => sessionStorage.removeItem(k));
+  history.replaceState(null, "", location.pathname); // the one-time code must not stay in the address bar
+  try {
+    const { code } = ChatAuth.parseCallback(search, st);
+    const tokens = await ChatAuth.exchangeCode(state.config, code, redirectUri(), verifier);
+    ChatAuth.checkNonce(tokens, nonce);
+    $("token").value = tokens.access_token;
+    applyToken();
+    $("token").value = ""; // the token now lives in state.token only
+  } catch (e) {
+    setBanner("warn", "Sign-in failed: " + e.message);
+  }
+}
+
+function signOut() {
+  const url = ChatAuth.logoutUrl(state.config, redirectUri());
+  clearToken();
+  location.href = url;
+}
+
 /* ---------------------------------------------------------------- wiring */
 $("dummyAdmin").addEventListener("click", () => useDummyToken("alice", "Group-ShopAssist-Admin"));
 $("dummyViewer").addEventListener("click", () => useDummyToken("bob", "Group-ShopAssist-Viewer"));
 $("apply").addEventListener("click", applyToken);
-$("loginEntra").addEventListener("click", () => { location.href = "/login?idp=EntraID"; });
-$("loginCognito").addEventListener("click", () => { location.href = "/login?idp=COGNITO"; });
+$("loginEntra").addEventListener("click", () => { if (state.hosted) startLogin("EntraID"); else location.href = "/login?idp=EntraID"; });
+$("loginCognito").addEventListener("click", () => { if (state.hosted) startLogin(null); else location.href = "/login?idp=COGNITO"; });
+$("signOut").addEventListener("click", signOut);
 $("clearTok").addEventListener("click", clearToken);
 $("newSession").addEventListener("click", () => resetSession("New session: the agent starts without memory of the previous conversation."));
 $("clearLog").addEventListener("click", () => $("log").replaceChildren());
@@ -510,6 +564,25 @@ $("prompt").addEventListener("keydown", (e) => {
 (async function init() {
   renderTabs();
   selectUser("alice");
+  // Hosted (CloudFront): config.json sits next to the page and names the relay. Local: /api/config.
+  let hostedCfg = null;
+  try {
+    const r = await fetch("config.json");
+    if (r.ok) { const c = await r.json(); if (c && c.relay_url) hostedCfg = c; }
+  } catch { /* not hosted */ }
+  if (hostedCfg) {
+    state.config = hostedCfg; state.hosted = true;
+    $("target").textContent = `→ ${hostedCfg.relay_url}  (${hostedCfg.environment || "hosted"})`;
+    $("localBox").hidden = true; $("pasteBox").hidden = true; $("tokHelp").hidden = true;
+    $("loginBox").hidden = false; $("signOut").hidden = false;
+    $("loginEntra").hidden = !hostedCfg.entra_enabled;
+    $("loginNote").textContent = "Opens the sign-in page; after signing in you come back here. Tokens last 15 minutes, then sign in again.";
+    $("empty").querySelector("strong").textContent = "Sign in, then start chatting.";
+    const qs = new URLSearchParams(location.search);
+    if (qs.has("code") || qs.has("error")) await finishHostedLogin();
+    updateChrome();
+    return;
+  }
   try {
     const cfg = await (await fetch("/api/config")).json();
     state.config = cfg;
