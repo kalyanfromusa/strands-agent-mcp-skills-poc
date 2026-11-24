@@ -23,14 +23,18 @@
 #      this boundary, so it can't create a role more powerful than the boundary (privilege escalation).
 #   3. The apply role's permissions, one statement group per AWS service the main stack uses (3a-3k).
 #   4. A second policy for the clean sweep after a destroy (list calls, emptying ECR).
-#   5. The role itself and the attachment of both policies.
+#   4b. A third policy for the hosted chat page (S3 bucket and CloudFront).
+#   5. The role itself and the attachment of the three policies.
 #
 # Key terms
 #   Permissions boundary: a ceiling on a role's permissions. Effective rights = policy AND boundary.
 #   iam:PassRole: handing a role to an AWS service (for example "AgentCore, run my agent as this role").
 #   ABAC (attribute-based access control): allowing an action because of a resource's tags, used for
 #     Cognito pools, whose ARNs contain a generated id instead of a name.
-#   Known to be broad: bedrock-agentcore actions are allowed on every AgentCore resource in this account
+#   Known to be broad: the CloudFront create calls (they have no resource ARN before the object exists,
+#     so they are allowed on "*"; changes and deletes are limited to this account's distributions,
+#     origin access controls and response-headers policies, which carry no name in their ARN), and
+#     bedrock-agentcore actions are allowed on every AgentCore resource in this account
 #     and region (several of its ARNs embed generated ids). Tighten once the deployed ARNs are known
 #     (task 6.13 checks the negative cases).
 # =====================================================================================================
@@ -347,6 +351,7 @@ data "aws_iam_policy_document" "sweep" {
       "bedrock-agentcore:ListOauth2CredentialProviders", "bedrock-agentcore:ListWorkloadIdentities",
       "lambda:ListFunctions", "iam:ListRoles", "iam:ListPolicies", "secretsmanager:ListSecrets",
       "ecr:DescribeRepositories", "cognito-idp:ListUserPools",
+      "cloudfront:ListDistributions", "cloudfront:ListOriginAccessControls", "cloudfront:ListResponseHeadersPolicies",
     ]
     resources = ["*"]
   }
@@ -361,6 +366,54 @@ data "aws_iam_policy_document" "sweep" {
     resources = ["arn:aws:budgets::${local.account_id}:budget/*"]
   }
 
+}
+
+# Step 4b: a third policy for the hosted chat page (design.md section 12): the S3 bucket
+# shopassist-<env>-chat-ui-<account>-<region> and the CloudFront distribution in front of it. Separate
+# from the apply policy for the same size reason as the sweep policy. Lambda (the relay), IAM roles,
+# log groups and Cognito (the web client) are already covered by the apply policy.
+data "aws_iam_policy_document" "ui" {
+  for_each = local.env
+  #checkov:skip=CKV_AWS_111:CloudFront create calls have no resource ARN; changes are limited to CloudFront objects of this account.
+  #checkov:skip=CKV_AWS_356:Same reason.
+
+  # The page bucket and its objects (index.html, chat_auth.js, config.json).
+  statement {
+    sid       = "ChatUiBucket"
+    actions   = ["s3:*"]
+    resources = ["arn:aws:s3:::${each.value.dash}-chat-ui-*", "arn:aws:s3:::${each.value.dash}-chat-ui-*/*"]
+  }
+  # Creating CloudFront objects: no ARN exists before the call, so "*".
+  statement {
+    sid = "CloudFrontCreate"
+    actions = [
+      "cloudfront:CreateDistribution", "cloudfront:CreateDistributionWithTags", "cloudfront:CreateOriginAccessControl",
+      "cloudfront:CreateResponseHeadersPolicy",
+    ]
+    resources = ["*"]
+  }
+  # Reading, changing, tagging and deleting them, and clearing the cache after an apply (deploy.yml).
+  statement {
+    sid = "CloudFrontManage"
+    actions = [
+      "cloudfront:GetDistribution", "cloudfront:GetDistributionConfig", "cloudfront:UpdateDistribution", "cloudfront:DeleteDistribution",
+      "cloudfront:GetOriginAccessControl", "cloudfront:GetOriginAccessControlConfig", "cloudfront:UpdateOriginAccessControl", "cloudfront:DeleteOriginAccessControl",
+      "cloudfront:GetResponseHeadersPolicy", "cloudfront:GetResponseHeadersPolicyConfig", "cloudfront:UpdateResponseHeadersPolicy", "cloudfront:DeleteResponseHeadersPolicy",
+      "cloudfront:TagResource", "cloudfront:UntagResource", "cloudfront:ListTagsForResource",
+      "cloudfront:CreateInvalidation", "cloudfront:GetInvalidation",
+    ]
+    resources = [
+      "arn:aws:cloudfront::${local.account_id}:distribution/*",
+      "arn:aws:cloudfront::${local.account_id}:origin-access-control/*",
+      "arn:aws:cloudfront::${local.account_id}:response-headers-policy/*",
+    ]
+  }
+  # Managed policies attached to a distribution (CachingOptimized) are read-only AWS objects.
+  statement {
+    sid       = "CloudFrontReadManagedCachePolicy"
+    actions   = ["cloudfront:GetCachePolicy"]
+    resources = ["*"]
+  }
 }
 
 # ---------------------------------------------------------------- Step 5: the roles
@@ -406,4 +459,20 @@ resource "aws_iam_role_policy_attachment" "sweep" {
 
   role       = aws_iam_role.apply[each.key].name
   policy_arn = aws_iam_policy.sweep[each.key].arn
+}
+
+# The step 4b hosted-chat-page permissions as a third managed policy, attached to the same apply role.
+resource "aws_iam_policy" "ui" {
+  for_each = local.env
+
+  name        = "${var.name_prefix}-gha-ui-${each.key}"
+  description = "Hosted chat page of the ShopAssist ${each.key} environment (S3 bucket, CloudFront)"
+  policy      = data.aws_iam_policy_document.ui[each.key].json
+}
+
+resource "aws_iam_role_policy_attachment" "ui" {
+  for_each = local.env
+
+  role       = aws_iam_role.apply[each.key].name
+  policy_arn = aws_iam_policy.ui[each.key].arn
 }

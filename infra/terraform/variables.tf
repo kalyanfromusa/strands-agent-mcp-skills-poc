@@ -62,10 +62,11 @@ variable "environment" {
 
 # The git commit SHA whose container images to run. The pipeline passes it (-var image_tag=<sha>);
 # changing it is how a new version is rolled out, or an old one rolled back. It has no default on
-# purpose: every plan must say exactly which code it deploys. The four images are the agent, the
-# support MCP server, the orders Lambda and the role-mapper Lambda (all built from the same commit).
+# purpose: every plan must say exactly which code it deploys. The five images are the agent, the
+# support MCP server, the orders Lambda, the role-mapper Lambda and the chat-relay Lambda (all built
+# from the same commit).
 variable "image_tag" {
-  description = "Full 40-character git commit SHA of the images in ECR (all four images share it)."
+  description = "Full 40-character git commit SHA of the images in ECR (all five images share it)."
   type        = string
 
   validation {
@@ -114,6 +115,17 @@ variable "log_retention_days" {
   description = "CloudWatch Logs retention for Lambda and runtime log groups."
   type        = number
   default     = 7
+}
+
+# The most copies of the chat relay Lambda (the hosted chat page's backend) that may run at once. It is
+# the hard cap on spend if the public relay address is flooded: extra requests get HTTP 429. null means
+# no reservation, for an account whose Lambda concurrency limit is too low to reserve (the apply then
+# fails with an "unreserved concurrency" error; see docs/09-troubleshooting.md).
+variable "chat_relay_reserved_concurrency" {
+  description = "Reserved concurrency of the chat relay Lambda (spend cap). null = unreserved."
+  type        = number
+  default     = 5
+  nullable    = true
 }
 
 # Load the demo orders into DynamoDB after the tables are created (the pipeline's runner has `uv`).
