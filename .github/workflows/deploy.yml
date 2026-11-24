@@ -239,7 +239,7 @@ jobs:
       - name: Find missing images
         id: missing
         run: |
-          for kind in agent support_mcp orders_lambda role_mapper; do
+          for kind in agent support_mcp orders_lambda role_mapper chat_relay; do
             repo="shopassist-${kind//_/-}"
             if aws ecr describe-images --repository-name "$repo" --image-ids "imageTag=${IMAGE_TAG}" >/dev/null 2>&1; then
               echo "$kind=false" >> "$GITHUB_OUTPUT"; echo "$repo:${IMAGE_TAG:0:12} already in ECR"
@@ -267,6 +267,10 @@ jobs:
         if: steps.missing.outputs.role_mapper == 'true'
         uses: ./.github/actions/build-image
         with: { kind: role_mapper, dockerfile: identity/role_mapper/Dockerfile, tag: "${{ env.IMAGE_TAG }}", source: src }
+      - name: Build chat_relay
+        if: steps.missing.outputs.chat_relay == 'true'
+        uses: ./.github/actions/build-image
+        with: { kind: chat_relay, dockerfile: chat_relay/Dockerfile, tag: "${{ env.IMAGE_TAG }}", source: src }
 
       # Give each newly built local image its ECR name (<registry>/<repo>:<sha>) and upload it.
       - name: Push the new images
@@ -276,9 +280,10 @@ jobs:
           NEED_SUPPORT: ${{ steps.missing.outputs.support_mcp }}
           NEED_ORDERS: ${{ steps.missing.outputs.orders_lambda }}
           NEED_MAPPER: ${{ steps.missing.outputs.role_mapper }}
+          NEED_RELAY: ${{ steps.missing.outputs.chat_relay }}
         run: |
           pushed=""
-          for pair in "agent:$NEED_AGENT" "support_mcp:$NEED_SUPPORT" "orders_lambda:$NEED_ORDERS" "role_mapper:$NEED_MAPPER"; do
+          for pair in "agent:$NEED_AGENT" "support_mcp:$NEED_SUPPORT" "orders_lambda:$NEED_ORDERS" "role_mapper:$NEED_MAPPER" "chat_relay:$NEED_RELAY"; do
             kind="${pair%%:*}"; need="${pair##*:}"
             [ "$need" = "true" ] || continue
             repo="shopassist-${kind//_/-}"

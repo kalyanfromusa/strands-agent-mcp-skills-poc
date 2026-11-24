@@ -51,7 +51,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 1. Tests, Terraform checks and all four images (no AWS access).
+  # 1. Tests, Terraform checks and all five images (no AWS access).
   checks:
     uses: ./.github/workflows/_checks.yml
 
