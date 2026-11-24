@@ -18,6 +18,8 @@ token there, so the page offers dummy tokens; the role comes from `local_gateway
 # What this file does
 #   A tiny local web server (Python standard library + httpx) with three routes:
 #     GET  /             the chat page (scripts/chat_ui.html)
+#     GET  /chat_auth.js the page's PKCE helpers (also used by the hosted page; /config.json is a 404 here,
+#                        which is how the page knows it is in local mode)
 #     GET  /api/config   non-secret deployment info for the page (region, runtime ARN, users client id)
 #     POST /api/invoke   {"token", "session_id", "prompt"} -> POST to the Runtime -> {"status", "result"}
 #     GET  /login?idp=…  start a browser sign-in (code + PKCE) on Cognito's page (EntraID or COGNITO)
@@ -58,13 +60,14 @@ from invoke_agent import (  # noqa: E402  (shared helpers, same contract as the 
 )
 
 PAGE = Path(__file__).resolve().parent / "chat_ui.html"
+AUTH_JS = Path(__file__).resolve().parent / "chat_auth.js"  # PKCE helpers, shared with the hosted page
 LOCAL_URL = "http://localhost:8080/invocations"  # `python agent/app.py` (BedrockAgentCoreApp, port 8080)
 MAX_BODY = 64 * 1024
 MAX_PROMPT = 4000
 JWT_RE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$")
 SESSION_RE = re.compile(r"^[A-Za-z0-9_-]{33,100}$")
 CSP = (
-    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+    "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; "
     "connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 )
 
@@ -130,6 +133,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path in ("/", "/index.html"):
             self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+        elif path == "/chat_auth.js":
+            self._send(200, AUTH_JS.read_bytes(), "application/javascript; charset=utf-8")
         elif path == "/api/config":
             self._json(200, self.config)
         elif path == "/login":
