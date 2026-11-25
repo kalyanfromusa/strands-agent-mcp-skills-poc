@@ -96,6 +96,11 @@ variable "callback_urls" {
   default     = ["http://localhost:8790/callback", "http://localhost:8791/callback"]
 }
 
+variable "web_callback_urls" {
+  description = "Callback and logout URL of the hosted chat page: [https://<cloudfront domain>/] (trailing slash)."
+  type        = list(string)
+}
+
 variable "logout_urls" {
   description = "Where Cognito may send the user after sign-out."
   type        = list(string)

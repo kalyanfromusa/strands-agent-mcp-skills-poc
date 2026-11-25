@@ -200,3 +200,14 @@ Nothing goes in git: secrets, `.deploy/`, `*.tfstate*`, `tfplan`, `dist/`, Entra
 - [ ] 10.9 Steering, `design.md`, `CLAUDE.md` and the original `strands-poc/tasks.md` (a note pointing here) are final
 - [ ] 10.10 🧪 Every command in the docs was run in P5–P9; `grep` finds no links to removed files and no `shop-admin`/boto3 leftovers
 - [ ] 10.11 "Verified run" section with dates and results (in `04`, `10`, `12`, `13`)
+
+## P11. Hosted chat UI (S3 + CloudFront + Cognito web client + Lambda relay; decided 2026-11-09)
+- [x] 11.1 Contracts and steering first: `design.md` §1, §5, §6, §7, §11, new §12; `decisions.md`; product, tech, ux-standards, structure
+- [x] 11.2 Relay Lambda `chat_relay/` (handler, Dockerfile, `Dockerfile.dockerignore`) + `tests/test_chat_relay.py`
+- [x] 11.3 Fifth image plumbing: ECR repo, `_checks.yml` leg, `deploy.yml` build/push, `ci_image_checks.sh chat_relay`
+- [x] 11.4 Page logic: `scripts/chat_auth.js` (PKCE), hosted mode in `scripts/chat_ui.html`, `scripts/chat_ui.py` route, `tests/test_chat_auth.py`
+- [x] 11.5 Terraform: modules `chat_site` and `chat_relay`, Cognito web client, allow-lists, outputs, `chat_relay_reserved_concurrency`
+- [x] 11.6 CI roles (`shopassist-gha-ui-<env>`), `deploy.yml` invalidation step, `destroy.yml` text, `scripts/leftovers.py` CloudFront check
+- [x] 11.7 Docs: `docs/11-chat-ui.md` hosted section, README, `03`, `04`, `07`, `09`, `10`
+- [x] 11.8 Close-out checks (pytest, fmt, validate for main and platform)
+- [ ] 11.9 👤 First apply: `platform` (new ECR repo, CI roles), then `deploy.yml`; browser demo as alice/bob/carol and Entra. **Not run.**

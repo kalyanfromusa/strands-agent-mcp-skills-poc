@@ -32,7 +32,9 @@ Step by step
        the env state file.
     3. Scan every service: AgentCore (runtimes, gateways, policy engines, credential providers,
        workload identities), Lambda, DynamoDB, S3, Cognito, IAM roles and policies, CloudWatch logs,
-       Secrets Manager (including secrets scheduled for deletion), ECR, Budgets and the tagging API.
+       Secrets Manager (including secrets scheduled for deletion), ECR, Budgets, CloudFront (the hosted
+       chat page: distributions by their comment, origin access controls and response-headers
+       policies by name) and the tagging API.
     4. Print the findings and exit 0 (clean) or 1 (something left).
 
 Key terms
@@ -70,6 +72,19 @@ def patterns(env: str | None) -> list[re.Pattern[str]]:
     if env is None:
         return [re.compile(rf"^{PROJECT}[-_]", re.I), re.compile(rf"/{PROJECT}[-_]", re.I)]
     return [re.compile(rf"(^|/){PROJECT}[-_]{env}[-_]", re.I)]
+
+
+def cloudfront_items(cf, op: str, list_key: str, **kw) -> Iterable[dict]:
+    """Iterate over a CloudFront list call. CloudFront pages with Marker/NextMarker and wraps the items
+    as <list_key>.Items (absent when empty).
+    """
+    marker = None
+    while True:
+        page = getattr(cf, op)(**kw, **({"Marker": marker} if marker else {}))[list_key]
+        yield from page.get("Items", [])
+        marker = page.get("NextMarker")
+        if not marker:
+            return
 
 
 # Owned by the platform stack, not by an environment: an environment destroy must leave them alone.
@@ -183,6 +198,9 @@ def main() -> int:
     # Each entry is wrapped in `safe`, so one denied call doesn't stop the rest of the scan.
     # Budgets is a global service that is always called in us-east-1.
     ac = c("bedrock-agentcore-control")
+    # CloudFront is global and always called in us-east-1. A distribution is named by its comment
+    # (shopassist-<env>-chat-ui); the origin access control and the response-headers policy by name.
+    cf = c("cloudfront", region_name="us-east-1")
     checks: dict[str, Callable[[], list[str]]] = {
         "AgentCore runtimes": lambda: [r["agentRuntimeName"] for r in paged(ac, "list_agent_runtimes", "agentRuntimes")],
         "AgentCore gateways": lambda: [g["name"] for g in paged(ac, "list_gateways", "items")],
@@ -198,6 +216,9 @@ def main() -> int:
         "CloudWatch log groups": lambda: [g["logGroupName"] for g in paged(c("logs"), "describe_log_groups", "logGroups")],
         "Secrets (incl. scheduled deletion)": lambda: [s["Name"].split("/")[-1] for s in paged(c("secretsmanager"), "list_secrets", "SecretList", IncludePlannedDeletion=True) if "bedrock-agentcore-identity" in s["Name"] or s["Name"].startswith(PROJECT)],
         "Budgets": lambda: [b["BudgetName"] for b in c("budgets", region_name="us-east-1").describe_budgets(AccountId=account).get("Budgets", [])],
+        "CloudFront distributions": lambda: [d["Comment"] for d in cloudfront_items(cf, "list_distributions", "DistributionList")],
+        "CloudFront origin access controls": lambda: [o["Name"] for o in cloudfront_items(cf, "list_origin_access_controls", "OriginAccessControlList")],
+        "CloudFront response-headers policies": lambda: [p["ResponseHeadersPolicy"]["ResponseHeadersPolicyConfig"]["Name"] for p in cloudfront_items(cf, "list_response_headers_policies", "ResponseHeadersPolicyList", Type="custom")],
     }
     for label, fn in checks.items():
         hits = [n for n in safe(label, fn, problems) if matches(n, pats, env)]
@@ -236,13 +257,15 @@ def main() -> int:
                 c("lambda").get_function(FunctionName=arn.rsplit(":", 1)[1])
             elif arn.startswith("arn:aws:s3:::"):
                 c("s3").head_bucket(Bucket=arn.split(":::", 1)[1])
+            elif ":cloudfront:" in arn and ":distribution/" in arn:
+                c("cloudfront", region_name="us-east-1").get_distribution(Id=arn.rsplit("/", 1)[1])
             elif ":logs:" in arn and ":log-group:" in arn:
                 name = arn.split(":log-group:", 1)[1].removesuffix(":*")
                 return any(g["logGroupName"] == name for g in c("logs").describe_log_groups(logGroupNamePrefix=name)["logGroups"])
             return True
         except ClientError as e:
             code = e.response["Error"]["Code"]
-            return code not in ("ResourceNotFoundException", "NotFound", "404", "NoSuchBucket")
+            return code not in ("ResourceNotFoundException", "NotFound", "404", "NoSuchBucket", "NoSuchDistribution")
 
     # 3c. The tagging API catches resources the name checks above don't cover. ARNs (Amazon Resource
     # Names, AWS's full ids) that only the lagging tag index still lists go to `stale` (a NOTE, not a

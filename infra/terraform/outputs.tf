@@ -11,6 +11,7 @@
 #   (The pipeline never prints the full apply output, only a summary, so in CI these are not shown.)
 #
 # Step by step
+#   (The hosted chat page keys, chat_ui_url and chat_relay_url among them, are repeated too.)
 #   1. Repeat most keys of .deploy/<env>/outputs.json as Terraform outputs (cognito_domain_url and
 #      entra_enabled are only in the file).
 #   2. Print the full paths of .deploy/<env>/outputs.json and .deploy/<env>/users.json.
@@ -40,6 +41,11 @@ output "oauth_provider_name" { value = module.identity.oauth_provider_name }
 output "cognito_users_client_id" { value = module.identity.users_client_id }
 output "policy_engine_id" { value = module.gateway.policy_engine_id }
 output "memory_id" { value = module.memory.memory_id }
+output "cognito_web_client_id" { value = module.identity.web_client_id }
+output "chat_ui_url" { value = module.chat_site.url }
+output "chat_ui_bucket" { value = module.chat_site.bucket }
+output "chat_ui_distribution_id" { value = module.chat_site.distribution_id }
+output "chat_relay_url" { value = module.chat_relay.function_url }
 output "deployed_by" { value = "terraform" }
 
 # Full path of .deploy/<env>/outputs.json on the computer that ran Terraform.

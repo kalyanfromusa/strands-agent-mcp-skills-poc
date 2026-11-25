@@ -19,7 +19,7 @@ destroyed in the reverse order:
 | # | Folder | What it creates | State kept in | How often |
 |---|---|---|---|---|
 | 1 | `infra/terraform/bootstrap/` | The S3 bucket `shopassist-tfstate-<account>-<region>` that holds the other stacks' state (private, encrypted, TLS only, no versioning) | a local file `bootstrap/terraform.tfstate` (git-ignored) | once per account |
-| 2 | `infra/terraform/platform/` | 4 ECR repositories (`shopassist-agent`, `-support-mcp`, `-orders-lambda`, `-role-mapper`), the GitHub OIDC provider, the CI roles `shopassist-gha-plan` and `shopassist-gha-apply-<env>`, a permissions boundary per env | S3, key `platform.tfstate` | once, then rarely |
+| 2 | `infra/terraform/platform/` | 5 ECR repositories (`shopassist-agent`, `-support-mcp`, `-orders-lambda`, `-role-mapper`, `-chat-relay`), the GitHub OIDC provider, the CI roles `shopassist-gha-plan` and `shopassist-gha-apply-<env>`, a permissions boundary per env | S3, key `platform.tfstate` | once, then rarely |
 | 3 | `infra/terraform/` (the **main** stack) | The application: tables, bucket + skills, Cognito, Lambdas, runtimes, Gateway, Cedar policies | S3, key `main/<env>.tfstate` | every deploy (by the pipeline) |
 
 Why split it up?
@@ -59,6 +59,8 @@ Terraform works out the order from the references between resources. Roughly:
 | `gateway` | Cedar policy engine, the Gateway, its targets `orders` and `support`, one policy per `infra/policies/*.cedar` |
 | `terraform_data.sync_gateway_targets` | Asks the Gateway to re-read the `support` server's tool list whenever its image changes (`scripts/sync_gateway_target.py`) |
 | `agent_runtime` | The agent on AgentCore Runtime (container image), with the JWT check that only lets `Group-ShopAssist-*` users in |
+| `chat_site` | The hosted chat page: private S3 bucket `shopassist-<env>-chat-ui-…`, CloudFront distribution (default `*.cloudfront.net` address), the page files and `config.json` |
+| `chat_relay` | The Lambda (container image) and function URL the hosted page posts to, with a reserved-concurrency cap (`chat_relay_reserved_concurrency`, default 5) |
 | `aws_budgets_budget.monthly` | Optional (`enable_budget = true`): a monthly budget with e-mail alerts |
 | `local_file` / `local_sensitive_file` | `.deploy/<env>/outputs.json` (addresses and ids) and `.deploy/<env>/users.json` (demo passwords), on the machine that ran Terraform |
 
@@ -67,7 +69,7 @@ Terraform works out the order from the references between resources. Roughly:
 | Variable | Where it's set | Meaning |
 |---|---|---|
 | `environment` | `envs/<env>.tfvars` | `dev` or `prod`. Part of every name |
-| `image_tag` | `-var image_tag=<sha>` (by the pipeline) | The full git SHA of the images to run. All four images share it. **Changing it is how a new version is rolled out** |
+| `image_tag` | `-var image_tag=<sha>` (by the pipeline) | The full git SHA of the images to run. All five images share it. **Changing it is how a new version is rolled out** |
 | `model_id` | `envs/<env>.tfvars` | The Bedrock model for the agent (`us.anthropic.claude-haiku-4-5-20251001-v1:0`) |
 | `log_retention_days`, `seed_data`, `enable_budget`, `budget_email`, `budget_limit_usd` | `envs/<env>.tfvars` | Self-explanatory; see `variables.tf` |
 | `enable_entra`, `entra_*` | `envs/<env>.tfvars`; the client secret only as `TF_VAR_entra_client_secret` from a GitHub environment secret | Entra ID sign-in, off by default |
@@ -105,6 +107,11 @@ AWS_PROFILE=personal terraform output github_variables_commands   # the `gh vari
    environments `prod` (required reviewer, branch `main` only, variable `AWS_APPLY_ROLE`) and `dev`. The
    output above prints the exact commands. Details: [10-ci-cd.md §5](10-ci-cd.md#5-github-settings).
 4. Deploy through GitHub: **Actions → deploy → Run workflow**.
+
+Platform before the first deploy that includes the hosted chat page: it adds the ECR repository
+`shopassist-chat-relay` and the apply role's third policy `shopassist-gha-ui-<env>`. Apply the platform stack once
+(`AWS_PROFILE=personal terraform apply` in `infra/terraform/platform`) before running `deploy.yml`, or the image push
+and the CloudFront calls fail. The deploy then prints no page address; read `chat_ui_url` from `.deploy/<env>/outputs.json`.
 
 ## 4. Getting `.deploy/<env>/` on your machine
 

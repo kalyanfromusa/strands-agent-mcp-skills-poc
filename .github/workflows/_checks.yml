@@ -6,7 +6,7 @@
 #   three jobs side by side, with no AWS access at all:
 #     test    uv sync + pytest (offline: moto fakes DynamoDB, no AWS) and the lock-file drift check;
 #     iac     terraform fmt/validate for the three roots, tflint, checkov (report only for now);
-#     images  one leg per image (agent, support_mcp, orders_lambda, role_mapper) on a native arm64
+#     images  one leg per image (agent, support_mcp, orders_lambda, role_mapper, chat_relay) on a native arm64
 #             runner: build, start + check, Trivy scan. Nothing is pushed.
 #
 # Where it fits
@@ -17,7 +17,7 @@
 # Step by step
 #   1. test:   install the exact locked Python packages, run the unit tests, check the image lock files.
 #   2. iac:    check Terraform formatting and validity offline, then lint (tflint) and scan (checkov).
-#   3. images: for each of the four images, run .github/actions/build-image (build, check, scan).
+#   3. images: for each of the five images, run .github/actions/build-image (build, check, scan).
 #
 # Key terms
 #   Reusable workflow: a workflow other workflows call like a function (on: workflow_call).
@@ -108,6 +108,8 @@ jobs:
             dockerfile: mcp_servers/orders_lambda/Dockerfile
           - kind: role_mapper
             dockerfile: identity/role_mapper/Dockerfile
+          - kind: chat_relay
+            dockerfile: chat_relay/Dockerfile
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

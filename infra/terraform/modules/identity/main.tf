@@ -25,6 +25,8 @@
 #      chat page, with a password or through the browser).
 #      5a. Only with enable_entra: register Entra ID as an OIDC identity provider ("EntraID").
 #      5b. Only with enable_entra: allow this pool to call the role-mapper Lambda.
+#      5c. Create the web app client (no secret, used by the hosted chat page on CloudFront with the
+#      browser code + PKCE flow).
 #   6. Create the groups Group-ShopAssist-Admin and Group-ShopAssist-Viewer.
 #   7. Generate a random password per demo user, create alice, bob and carol, and put alice in
 #      Group-ShopAssist-Admin and bob in Group-ShopAssist-Viewer (carol gets no group).
@@ -203,6 +205,39 @@ resource "aws_cognito_user_pool_client" "users" {
   depends_on = [aws_cognito_identity_provider.entra]
 }
 
+# Step 5c: the web client, used only by the hosted chat page (module chat_site). Like the users client
+# it is public (no secret) and uses the authorization code flow with PKCE, but it has no password flow
+# and its only callback and logout address is the CloudFront page (https://<domain>/, trailing slash).
+# It offers the same sign-in options and token lifetimes as the users client. Its id must be in the
+# Runtime's and the Gateway's allowed_client_ids, or every hosted call is a 401.
+# depends_on: the "EntraID" provider must exist before the client may list it.
+resource "aws_cognito_user_pool_client" "web" {
+  name         = "${var.name_prefix}-web"
+  user_pool_id = aws_cognito_user_pool.this.id
+
+  generate_secret     = false
+  explicit_auth_flows = ["ALLOW_REFRESH_TOKEN_AUTH"]
+
+  allowed_oauth_flows_user_pool_client = true
+  allowed_oauth_flows                  = ["code"]
+  allowed_oauth_scopes                 = ["openid", "email", "profile"]
+  callback_urls                        = var.web_callback_urls
+  logout_urls                          = var.web_callback_urls
+  supported_identity_providers         = var.enable_entra ? ["COGNITO", "EntraID"] : ["COGNITO"]
+
+  access_token_validity  = 15
+  id_token_validity      = 15
+  refresh_token_validity = 8
+  token_validity_units {
+    access_token  = "minutes"
+    id_token      = "minutes"
+    refresh_token = "hours"
+  }
+
+  prevent_user_existence_errors = "ENABLED"
+
+  depends_on = [aws_cognito_identity_provider.entra]
+}
 # ---------------------------------------------------------------- Entra ID federation (enable_entra)
 
 # Step 5a (only with enable_entra): Entra ID as an OpenID Connect identity provider. Users choose

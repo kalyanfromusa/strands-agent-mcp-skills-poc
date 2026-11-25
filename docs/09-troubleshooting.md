@@ -125,6 +125,24 @@ Problems usually show up in CI already, because every image is started and calle
 - Images are never built locally (decision 2026-11-07). If you must reproduce a build, use the same
   `docker buildx build --platform linux/arm64 -f <Dockerfile> .` from the repo root on an arm64 machine.
 
+## Hosted chat page
+
+- **Page says "not signed in" or every message returns 401 from the Runtime:** the token comes from the web client
+  `shopassist-<env>-web`; its id must be in the Runtime's and the Gateway's `allowed_client_ids` (`main.tf`). Also
+  check that the page is opened at exactly the `chat_ui_url` address (trailing slash): Cognito accepts that one
+  callback/logout URL only (`redirect_mismatch` otherwise). Tokens last 15 minutes, so sign in again after that.
+- **Browser console shows a CORS error on the relay call:** the page must be opened from the CloudFront address
+  (the relay allows that origin only), not from a file or another host. Check `ALLOWED_ORIGIN` in the relay's
+  Lambda settings.
+- **Relay answers 429 or "Rate Exceeded":** the reserved concurrency (`chat_relay_reserved_concurrency`, default 5)
+  is used up, usually by long answers in parallel. Retry, or raise the value.
+- **Apply fails with "unreserved concurrency … below its minimum" for the relay:** a new or low-limit account
+  can't reserve concurrency. Set `chat_relay_reserved_concurrency = null` in `envs/<env>.tfvars` (no cap, so the
+  spend limit is gone) or ask AWS to raise the account's Lambda concurrency limit.
+- **Old page still shown after a deploy:** the deploy job invalidates the cache; if you changed the page by hand,
+  run `aws cloudfront create-invalidation --distribution-id <chat_ui_distribution_id> --paths "/*"`.
+- **Relay answers 504:** the agent took longer than 280 s. Ask a shorter question or start a new session.
+
 ## Port in use
 
 `scripts/local_gateway.py` listens on `localhost:8000` by default, which often clashes with other

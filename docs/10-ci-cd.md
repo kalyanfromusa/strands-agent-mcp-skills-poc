@@ -49,7 +49,7 @@ Rules behind it (decisions of 2026-11-06/07, see `.kiro/steering/decisions.md`):
    file; only the summary from `scripts/tf_plan_summary.py` (resource addresses and actions, no values) is
    shown. That summary is what you approve.
 3. **deploy** (GitHub environment `prod` → **waits for your approval**, then the apply role):
-   1. ECR login; find which of the 4 images for `<sha>` aren't in ECR yet.
+   1. ECR login; find which of the 5 images for `<sha>` aren't in ECR yet.
    2. Build, check and scan each missing image (same composite action as CI), then push it.
    3. Re-plan, compute the plan hash (`tf_plan_summary.py --hash`) and **stop if it differs** from the
       approved plan (something changed between approval and apply).
@@ -74,6 +74,7 @@ commit and deploying the new head works too.
 | `shopassist-support-mcp` | `mcp_servers/support_mcp/Dockerfile` | `python:3.12-slim` (arm64) | AgentCore Runtime, MCP on 8000 (`/mcp`) |
 | `shopassist-orders-lambda` | `mcp_servers/orders_lambda/Dockerfile` | `public.ecr.aws/lambda/python:3.12-arm64` | Lambda, `handler.lambda_handler` |
 | `shopassist-role-mapper` | `identity/role_mapper/Dockerfile` | `public.ecr.aws/lambda/python:3.12-arm64` | Lambda (Cognito pre-token trigger) |
+| `shopassist-chat-relay` | `chat_relay/Dockerfile` | `public.ecr.aws/lambda/python:3.12-arm64` | Lambda behind the hosted chat page (function URL) |
 
 - **Build context = the repo root**, with an **allow-list** `.dockerignore` per image (`<Dockerfile>.dockerignore`):
   only the files that image needs are sent to the build.
@@ -100,7 +101,7 @@ token's `sub` claim matches the role's trust policy (`platform/iam_ci.tf`).
 | Role | Assumable by | Can do |
 |---|---|---|
 | `shopassist-gha-plan` | pull requests from this repo, and `main` | read-only (no business data, no secret values) + Terraform state read and lock-file write |
-| `shopassist-gha-apply-<env>` | **only** jobs in the GitHub environment `<env>` (prod has a required reviewer) | create/update/delete the `shopassist-<env>-*` resources, push/delete ECR images, the destroy sweep (`platform/iam_apply.tf`) |
+| `shopassist-gha-apply-<env>` | **only** jobs in the GitHub environment `<env>` (prod has a required reviewer) | create/update/delete the `shopassist-<env>-*` resources, push/delete ECR images, the destroy sweep (`platform/iam_apply.tf`). Three managed policies: `shopassist-gha-apply-<env>`, `shopassist-gha-sweep-<env>` and `shopassist-gha-ui-<env>` (the chat page bucket and CloudFront; a managed policy holds at most 6,144 characters) |
 
 Least privilege details: the apply role's permissions are scoped to `shopassist-*` names; `iam:PassRole` is limited
 to the stack's own roles; every IAM role the main stack creates must carry the `shopassist-<env>-boundary`

@@ -18,7 +18,7 @@
 #   ARNs (stored as GitHub variables). Forks never get an OIDC token, so a fork PR can't use any role.
 #
 # Step by step
-#   1. Shared names: account id, state bucket, the four ECR repository ARNs.
+#   1. Shared names: account id, state bucket, the five ECR repository ARNs.
 #   2. A helper that builds a trust policy for a list of allowed "sub" values.
 #   3. Plan role: AWS-managed ReadOnlyAccess, MINUS reads of business data (S3 objects outside the
 #      ShopAssist buckets, DynamoDB items, secret values), PLUS state read and lock-file write.
@@ -34,7 +34,7 @@
 
 # Step 1: shared names. The account id comes from the credentials Terraform runs with.
 #   state_bucket: the bootstrap bucket, rebuilt from the same naming pattern.
-#   repo_arns:    the four ECR repositories (ecr.tf); used by the apply roles in iam_apply.tf.
+#   repo_arns:    the five ECR repositories (ecr.tf); used by the apply roles in iam_apply.tf.
 #   sub_main / sub_pull_request: the token subjects of runs on main and of pull requests.
 data "aws_caller_identity" "current" {}
 

@@ -102,9 +102,12 @@ Smoke test from your machine (after recreating `.deploy/prod/`, see docs/04 §4)
 uv run python scripts/invoke_agent.py --user alice --prompt "Where is order 1042?"
 uv run python scripts/invoke_agent.py --user carol --prompt "Hello"     # expect HTTP 401/403
 uv run python scripts/demo_access.py                                   # alice / bob / carol / direct-Gateway matrix
-uv run python scripts/chat_ui.py --open                                # browser chat
+uv run python scripts/chat_ui.py --open                                # local browser chat
 uv run python scripts/invoke_agent.py --login                          # sign in with Entra ID (when enabled)
 ```
+
+Hosted chat page: after a deploy, open `chat_ui_url` from `.deploy/<env>/outputs.json` (a CloudFront address) and sign in
+with Cognito or Entra ID; no local server needed ([docs/11](docs/11-chat-ui.md#hosted-chat-ui-cloudfront)).
 
 ## Repository layout
 
@@ -114,9 +117,10 @@ uv run python scripts/invoke_agent.py --login                          # sign in
 | `skills/` | `order-tracking`, `returns-and-refunds` (+ `references/return-policy.md`), `support-ticketing` |
 | `mcp_servers/` | `common/` (store, return rules), `orders_lambda/` (handler + `tools_schema.json`), `support_mcp/` (FastMCP server + `faq.json`); one `Dockerfile` each |
 | `identity/role_mapper/` | Cognito pre-token-generation Lambda that maps Entra roles to Cognito groups |
+| `chat_relay/` | Lambda behind the hosted chat page: forwards the page's request and the user's token to the agent Runtime (a browser can't call the Runtime directly) |
 | `data/seed.json` | Demo customers and orders (relative dates) |
 | `scripts/` | Local use: `local_gateway.py`, `run_local.py`, `invoke_agent.py`, `oidc_login.py`, `chat_ui.py` + `.html`, `demo_access.py`, `seed_data.py`. Pipeline helpers: `ci_image_checks.sh`, `tf_plan_summary.py`, `pin_requirements.py`, `sync_gateway_target.py`, `log_group.py`, `leftovers.py`, `destroy_everything.sh` ([map](docs/10-ci-cd.md#7-file-by-file-map)) |
-| `infra/terraform/` | `bootstrap/` (state bucket), `platform/` (ECR, OIDC, CI roles), the main stack + `modules/{data,identity,role_mapper,lambda_tools,mcp_runtime,gateway,agent_runtime}`, `envs/{dev,prod}.{tfvars,backend.hcl}` |
+| `infra/terraform/` | `bootstrap/` (state bucket), `platform/` (ECR, OIDC, CI roles), the main stack + `modules/{data,identity,role_mapper,lambda_tools,mcp_runtime,gateway,agent_runtime,chat_site,chat_relay}`, `envs/{dev,prod}.{tfvars,backend.hcl}` |
 | `infra/policies/` | Cedar policy templates (who may call which tool) |
 | `.github/` | Workflows `ci`, `build`, `deploy`, `destroy`, `_checks` and the `build-image` action |
 | `tests/` | `uv run pytest` (offline; moto for DynamoDB) |
