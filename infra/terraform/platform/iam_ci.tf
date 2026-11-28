@@ -118,7 +118,8 @@ data "aws_iam_policy_document" "plan" {
   }
 
   # 3b: ReadOnlyAccess would also allow reading business data. Deny that explicitly.
-  # S3 objects: only the state bucket and the ShopAssist artifact buckets (skills files) may be read.
+  # S3 objects: only the state bucket, the ShopAssist artifact buckets (skills files) and the chat
+  # page buckets (public page files that Terraform refreshes as aws_s3_object) may be read.
   statement {
     sid     = "DenyOtherS3Objects"
     effect  = "Deny"
@@ -126,6 +127,7 @@ data "aws_iam_policy_document" "plan" {
     not_resources = [
       "arn:aws:s3:::${local.state_bucket}/*",
       "arn:aws:s3:::${var.name_prefix}-*-artifacts-${local.account_id}-${var.region}/*",
+      "arn:aws:s3:::${var.name_prefix}-*-chat-ui-${local.account_id}-${var.region}/*",
     ]
   }
   # Table items, secret values, log contents and Cognito user listings are never needed for a plan.
