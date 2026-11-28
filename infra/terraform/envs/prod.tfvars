@@ -27,3 +27,8 @@ model_id           = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 log_retention_days = 7
 seed_data          = true
 enable_budget      = false
+
+# Account 438750401181 has a Lambda concurrency limit of 10, the minimum AWS keeps unreserved, so no
+# function can reserve any. Raise the account quota (Service Quotas, "Concurrent executions") and set
+# this back to 5 to restore the relay's spend cap.
+chat_relay_reserved_concurrency = null
